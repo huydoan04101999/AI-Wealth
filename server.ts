@@ -308,12 +308,12 @@ async function startServer() {
   });
 
   // Backup & Restore Routes (Admin only)
-  app.get("/api/backup", requireAuth, requireAdmin, async (req, res) => {
+  app.get("/api/backup", requireAuth, requireAdmin, async (req: any, res) => {
     if (!process.env.POSTGRES_URL) return res.status(500).json({ error: "No DB" });
     try {
-      const { rows: assets } = await sql`SELECT * FROM asset_definitions`;
-      const { rows: transactions } = await sql`SELECT * FROM transactions`;
-      const { rows: cash_flows } = await sql`SELECT * FROM cash_flows`;
+      const { rows: assets } = await sql`SELECT * FROM asset_definitions WHERE user_id = ${req.userId}`;
+      const { rows: transactions } = await sql`SELECT * FROM transactions WHERE user_id = ${req.userId}`;
+      const { rows: cash_flows } = await sql`SELECT * FROM cash_flows WHERE user_id = ${req.userId}`;
       
       const backupData = {
         timestamp: new Date().toISOString(),
@@ -331,7 +331,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/restore", requireAuth, requireAdmin, async (req, res) => {
+  app.post("/api/restore", requireAuth, requireAdmin, async (req: any, res) => {
     if (!process.env.POSTGRES_URL) return res.status(500).json({ error: "No DB" });
     try {
       const { data } = req.body;
@@ -341,17 +341,17 @@ async function startServer() {
       await sql`BEGIN`;
 
       try {
-        // Clear existing data
-        await sql`TRUNCATE TABLE transactions RESTART IDENTITY CASCADE`;
-        await sql`TRUNCATE TABLE cash_flows RESTART IDENTITY CASCADE`;
-        await sql`TRUNCATE TABLE asset_definitions RESTART IDENTITY CASCADE`;
+        // Clear existing data for this user
+        await sql`DELETE FROM transactions WHERE user_id = ${req.userId}`;
+        await sql`DELETE FROM cash_flows WHERE user_id = ${req.userId}`;
+        await sql`DELETE FROM asset_definitions WHERE user_id = ${req.userId}`;
 
         // Restore asset_definitions
         if (data.asset_definitions && data.asset_definitions.length > 0) {
           for (const item of data.asset_definitions) {
             await sql`
               INSERT INTO asset_definitions (category, name, symbol, current_price, updated_at, user_id)
-              VALUES (${item.category}, ${item.name}, ${item.symbol}, ${item.current_price}, ${item.updated_at || new Date()}, ${item.user_id})
+              VALUES (${item.category}, ${item.name}, ${item.symbol}, ${item.current_price}, ${item.updated_at || new Date()}, ${req.userId})
             `;
           }
         }
@@ -361,7 +361,7 @@ async function startServer() {
           for (const item of data.transactions) {
             await sql`
               INSERT INTO transactions (user_id, asset_type, asset_symbol, transaction_type, amount, price_per_unit, interest_rate, currency, date)
-              VALUES (${item.user_id}, ${item.asset_type}, ${item.asset_symbol}, ${item.transaction_type}, ${item.amount}, ${item.price_per_unit}, ${item.interest_rate || 0}, ${item.currency || 'USD'}, ${item.date || new Date()})
+              VALUES (${req.userId}, ${item.asset_type}, ${item.asset_symbol}, ${item.transaction_type}, ${item.amount}, ${item.price_per_unit}, ${item.interest_rate || 0}, ${item.currency || 'USD'}, ${item.date || new Date()})
             `;
           }
         }
@@ -371,7 +371,7 @@ async function startServer() {
           for (const item of data.cash_flows) {
             await sql`
               INSERT INTO cash_flows (user_id, type, category, amount, currency, description, date)
-              VALUES (${item.user_id}, ${item.type}, ${item.category}, ${item.amount}, ${item.currency}, ${item.description}, ${item.date || new Date()})
+              VALUES (${req.userId}, ${item.type}, ${item.category}, ${item.amount}, ${item.currency}, ${item.description}, ${item.date || new Date()})
             `;
           }
         }

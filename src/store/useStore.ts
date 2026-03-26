@@ -52,6 +52,7 @@ interface AppState {
   addChatSession: (session: ChatSession) => void;
   updateChatSession: (id: string, messages: ChatMessage[]) => void;
   deleteChatSession: (id: string) => void;
+  clearStore: () => void;
 }
 
 const defaultAgents: AgentConfig[] = [
@@ -133,6 +134,13 @@ export const useStore = create<AppState>()(
       deleteChatSession: (id) => set((state) => ({
         chatSessions: state.chatSessions.filter((s) => s.id !== id)
       })),
+      clearStore: () => set({
+        openRouterApiKey: '',
+        groqApiKey: '',
+        tavilyApiKey: '',
+        agents: defaultAgents,
+        chatSessions: []
+      }),
     }),
     {
       name: 'ai-wealth-team-storage',

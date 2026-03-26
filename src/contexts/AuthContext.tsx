@@ -9,6 +9,7 @@ import {
 } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../lib/firestore-error';
+import { useStore } from '../store/useStore';
 
 interface UserData {
   uid: string;
@@ -43,8 +44,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      setUser(firebaseUser);
       if (firebaseUser) {
+        setLoading(true);
+        setUser(firebaseUser);
         try {
           const userDocRef = doc(db, 'users', firebaseUser.uid);
           let userDoc;
@@ -93,6 +95,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           console.error("Error fetching user data:", error);
         }
       } else {
+        useStore.getState().clearStore();
+        localStorage.removeItem('ai-wealth-team-storage');
+        setUser(null);
         setUserData(null);
       }
       setLoading(false);
@@ -108,6 +113,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = async () => {
     await signOut(auth);
+    // Clear local storage data to ensure data isolation between users on the same browser
+    useStore.getState().clearStore();
+    localStorage.removeItem('ai-wealth-team-storage');
+    // We could also reload the page to completely clear in-memory state
+    window.location.href = '/login';
   };
 
   const fetchApi = async (url: string, options: RequestInit = {}) => {

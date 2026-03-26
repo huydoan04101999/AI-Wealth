@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Lock, AlertCircle } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
@@ -7,17 +7,22 @@ export default function Login() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
-  const { loginWithGoogle } = useAuth();
+  const { loginWithGoogle, user, userData } = useAuth();
+
+  useEffect(() => {
+    if (user && userData) {
+      navigate('/');
+    }
+  }, [user, userData, navigate]);
 
   const handleGoogleLogin = async () => {
     try {
       setError('');
       setLoading(true);
       await loginWithGoogle();
-      navigate('/');
+      // Navigation is handled by useEffect when auth state updates
     } catch (err: any) {
       setError(err.message || 'Đăng nhập thất bại. Vui lòng thử lại.');
-    } finally {
       setLoading(false);
     }
   };

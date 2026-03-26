@@ -22,7 +22,20 @@ export default function Login() {
       await loginWithGoogle();
       // Navigation is handled by useEffect when auth state updates
     } catch (err: any) {
-      setError(err.message || 'Đăng nhập thất bại. Vui lòng thử lại.');
+      console.error("Login error:", err);
+      if (
+        err.code === 'auth/popup-closed-by-user' || 
+        err.code === 'auth/cancelled-popup-request' ||
+        err.message?.includes('popup-closed-by-user')
+      ) {
+        setError(''); // Ignore the error if user just closed the popup
+      } else if (err.code === 'auth/popup-blocked') {
+        setError('Trình duyệt của bạn đã chặn cửa sổ đăng nhập. Vui lòng cho phép mở popup.');
+      } else if (err.code === 'auth/network-request-failed') {
+        setError('Lỗi kết nối mạng. Vui lòng kiểm tra lại đường truyền.');
+      } else {
+        setError(err.message || 'Đăng nhập thất bại. Vui lòng thử lại.');
+      }
       setLoading(false);
     }
   };

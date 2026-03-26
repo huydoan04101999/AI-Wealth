@@ -127,10 +127,8 @@ export default function Portfolio() {
       const method = editingAssetId ? 'PUT' : 'POST';
 
       const parsedPrice = parseFloat(parseInputNumber(newAsset.current_price));
-      // Convert to USD before saving if input was in VND (for non-crypto)
-      // Actually, we store everything in USD in the DB for consistency, but for non-crypto we input in VND.
-      const assetCurrency = newAsset.category === 'crypto' ? 'USD' : 'VND';
-      const priceInUsd = assetCurrency === 'VND' ? parsedPrice / exchangeRate : parsedPrice;
+      // Convert to USD before saving if input was in VND
+      const priceInUsd = currency === 'VND' ? parsedPrice / exchangeRate : parsedPrice;
 
       const res = await fetchApi(url, {
         method,
@@ -152,9 +150,8 @@ export default function Portfolio() {
 
   const handleEditAsset = (asset: AssetDefinition) => {
     setEditingAssetId(asset.id);
-    // Convert USD price to asset's display currency for editing
-    const assetCurrency = asset.category === 'crypto' ? 'USD' : 'VND';
-    const displayPrice = assetCurrency === 'VND' 
+    // Convert USD price to user's global currency for editing
+    const displayPrice = currency === 'VND' 
       ? (parseFloat(asset.current_price) * exchangeRate).toString() 
       : asset.current_price;
       
@@ -169,7 +166,10 @@ export default function Portfolio() {
     if (!confirm('Xóa loại tài sản này sẽ ảnh hưởng đến việc hiển thị giá hiện tại của các giao dịch liên quan. Tiếp tục?')) return;
     try {
       const res = await fetchApi(`/api/portfolio/assets/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Failed to delete asset');
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to delete asset');
+      }
       fetchAssetDefinitions();
     } catch (err: any) {
       alert(err.message);
@@ -485,7 +485,7 @@ export default function Portfolio() {
               />
             </div>
             <div className="space-y-2">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Giá hiện tại (VND)</label>
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Giá hiện tại ({currency})</label>
               <input
                 type="text"
                 required
@@ -546,7 +546,7 @@ export default function Portfolio() {
                       </td>
                       <td className="px-6 py-4 font-bold text-slate-900">{asset.name}</td>
                       <td className="px-6 py-4 text-right font-mono font-bold text-slate-700">
-                        {formatCurrency(parseFloat(asset.current_price) * exchangeRate, 'VND')}
+                        {formatCurrency(currency === 'VND' ? parseFloat(asset.current_price) * exchangeRate : parseFloat(asset.current_price), currency)}
                       </td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end gap-2">

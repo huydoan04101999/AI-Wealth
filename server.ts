@@ -90,7 +90,8 @@ async function startServer() {
   app.delete("/api/portfolio/assets/:id", requireAuth, async (req: any, res) => {
     if (!process.env.POSTGRES_URL) return res.status(500).json({ error: "No DB" });
     try {
-      const { id } = req.params;
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: "Invalid ID" });
       await sql`DELETE FROM asset_definitions WHERE id = ${id} AND user_id = ${req.userId}`;
       res.json({ success: true });
     } catch (error) {
@@ -101,7 +102,8 @@ async function startServer() {
   app.put("/api/portfolio/assets/:id", requireAuth, async (req: any, res) => {
     if (!process.env.POSTGRES_URL) return res.status(500).json({ error: "No DB" });
     try {
-      const { id } = req.params;
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: "Invalid ID" });
       const { category, name, current_price } = req.body;
       const symbol = name.toUpperCase().replace(/\s+/g, '_');
       
@@ -215,7 +217,8 @@ async function startServer() {
   app.put("/api/portfolio/transactions/:id", requireAuth, async (req: any, res) => {
     if (!process.env.POSTGRES_URL) return res.status(500).json({ error: "No DB" });
     try {
-      const { id } = req.params;
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: "Invalid ID" });
       const { asset_type, asset_symbol, transaction_type, amount, price_per_unit, interest_rate, currency, date } = req.body;
       const safeAmount = amount === "" ? 0 : amount;
       const safePrice = price_per_unit === "" ? 0 : price_per_unit;
@@ -242,7 +245,8 @@ async function startServer() {
   app.delete("/api/portfolio/transactions/:id", requireAuth, async (req: any, res) => {
     if (!process.env.POSTGRES_URL) return res.status(500).json({ error: "No DB" });
     try {
-      const { id } = req.params;
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: "Invalid ID" });
       await sql`DELETE FROM transactions WHERE id = ${id} AND user_id = ${req.userId}`;
       res.json({ success: true });
     } catch (error) {
@@ -278,7 +282,8 @@ async function startServer() {
   app.put("/api/cashflow/:id", requireAuth, async (req: any, res) => {
     if (!process.env.POSTGRES_URL) return res.status(500).json({ error: "No DB" });
     try {
-      const { id } = req.params;
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: "Invalid ID" });
       const { type, category, amount, currency, description, date } = req.body;
       await sql`
         UPDATE cash_flows 
@@ -299,7 +304,8 @@ async function startServer() {
   app.delete("/api/cashflow/:id", requireAuth, async (req: any, res) => {
     if (!process.env.POSTGRES_URL) return res.status(500).json({ error: "No DB" });
     try {
-      const { id } = req.params;
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: "Invalid ID" });
       await sql`DELETE FROM cash_flows WHERE id = ${id} AND user_id = ${req.userId}`;
       res.json({ success: true });
     } catch (error) {

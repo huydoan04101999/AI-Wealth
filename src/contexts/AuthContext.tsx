@@ -131,7 +131,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     
     return fetch(url, {
       ...options,
-      headers
+      headers,
+      cache: 'no-store'
     });
   };
 

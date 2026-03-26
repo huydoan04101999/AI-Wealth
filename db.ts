@@ -3,7 +3,7 @@ import "dotenv/config";
 
 export const pool = new Pool({
   connectionString: process.env.POSTGRES_URL,
-  ssl: process.env.POSTGRES_URL && process.env.POSTGRES_URL.includes('neon.tech') 
+  ssl: process.env.POSTGRES_URL && !process.env.POSTGRES_URL.includes('localhost') 
     ? { rejectUnauthorized: false } 
     : false
 });

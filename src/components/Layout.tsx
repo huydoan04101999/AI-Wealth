@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Users, Briefcase, Settings, TrendingUp, DollarSign, Globe, UserCog, DatabaseBackup, Calculator, LogOut, Menu, X } from 'lucide-react';
+import { LayoutDashboard, Users, Briefcase, Settings, TrendingUp, DollarSign, Globe, UserCog, DatabaseBackup, Calculator, LogOut, Menu, X, Bitcoin } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -13,6 +13,7 @@ export default function Layout() {
     { name: 'Tổng quan', path: '/', icon: LayoutDashboard },
     { name: 'Phòng tác chiến', path: '/war-room', icon: Users },
     { name: 'Danh mục', path: '/portfolio', icon: Briefcase },
+    { name: 'Crypto AI', path: '/crypto', icon: Bitcoin },
     { name: 'Dòng tiền', path: '/cashflow', icon: DollarSign },
   ];
 

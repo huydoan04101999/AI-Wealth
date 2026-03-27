@@ -8,6 +8,7 @@ import Settings from './pages/Settings';
 import Users from './pages/Users';
 import BackupRestore from './pages/BackupRestore';
 import Login from './pages/Login';
+import Crypto from './pages/Crypto';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 
 const ProtectedRoute = ({ children, adminOnly = false }: { children: React.ReactNode, adminOnly?: boolean }) => {
@@ -34,6 +35,7 @@ export default function App() {
             <Route index element={<Dashboard />} />
             <Route path="war-room" element={<WarRoom />} />
             <Route path="portfolio" element={<Portfolio />} />
+            <Route path="crypto" element={<Crypto />} />
             <Route path="cashflow" element={<CashFlow />} />
             <Route path="users" element={<ProtectedRoute adminOnly><Users /></ProtectedRoute>} />
             <Route path="backup" element={<ProtectedRoute adminOnly><BackupRestore /></ProtectedRoute>} />

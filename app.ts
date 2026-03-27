@@ -24,6 +24,49 @@ const requireAdmin = (req: any, res: any, next: any) => {
   next();
 };
 
+// Cache for Bitcoin data to avoid rate limiting
+let btcStatsCache: { data: any, timestamp: number } | null = null;
+const CACHE_DURATION = 60000; // 1 minute
+
+app.get("/api/crypto/btc/stats", async (req, res) => {
+  const now = Date.now();
+  if (btcStatsCache && (now - btcStatsCache.timestamp < CACHE_DURATION)) {
+    return res.json(btcStatsCache.data);
+  }
+
+  try {
+    const response = await fetch('https://api.coingecko.com/api/v3/coins/bitcoin?localization=false&tickers=false&market_data=true&community_data=false&developer_data=false&sparkline=false');
+    if (!response.ok) {
+      throw new Error(`CoinGecko API error: ${response.status}`);
+    }
+    const data = await response.json();
+    btcStatsCache = { data, timestamp: now };
+    res.json(data);
+  } catch (error) {
+    console.error("Error fetching BTC stats from CoinGecko:", error);
+    // If cache exists, return it even if expired as fallback
+    if (btcStatsCache) {
+      return res.json(btcStatsCache.data);
+    }
+    res.status(500).json({ error: "Failed to fetch BTC stats" });
+  }
+});
+
+app.get("/api/crypto/btc/ohlc", async (req, res) => {
+  const { timeframe } = req.query;
+  try {
+    const response = await fetch(`https://api.coingecko.com/api/v3/coins/bitcoin/ohlc?vs_currency=usd&days=${timeframe || '7'}`);
+    if (!response.ok) {
+      throw new Error(`CoinGecko API error: ${response.status}`);
+    }
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    console.error("Error fetching BTC OHLC from CoinGecko:", error);
+    res.status(500).json({ error: "Failed to fetch BTC OHLC data" });
+  }
+});
+
 // Health check
 app.get("/api/health", async (req, res) => {
   let dbStatus = "unknown";

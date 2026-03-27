@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { db, auth } from '../firebase';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 
 export interface ChatMessage {
   id: string;
@@ -53,6 +55,8 @@ interface AppState {
   updateChatSession: (id: string, messages: ChatMessage[]) => void;
   deleteChatSession: (id: string) => void;
   clearStore: () => void;
+  loadSettingsFromFirestore: () => Promise<void>;
+  saveSettingsToFirestore: () => Promise<void>;
 }
 
 const defaultAgents: AgentConfig[] = [
@@ -141,6 +145,50 @@ export const useStore = create<AppState>()(
         agents: defaultAgents,
         chatSessions: []
       }),
+      loadSettingsFromFirestore: async () => {
+        const user = auth.currentUser;
+        if (!user) return;
+        
+        try {
+          const docRef = doc(db, 'users', user.uid, 'settings', 'config');
+          const docSnap = await getDoc(docRef);
+          
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            set({
+              openRouterApiKey: data.openRouterApiKey || '',
+              groqApiKey: data.groqApiKey || '',
+              tavilyApiKey: data.tavilyApiKey || '',
+              exchangeRate: data.exchangeRate || 25000,
+              currency: data.currency || 'VND',
+              agents: data.agents || defaultAgents,
+            });
+          }
+        } catch (error) {
+          console.error("Error loading settings from Firestore:", error);
+        }
+      },
+      saveSettingsToFirestore: async () => {
+        const user = auth.currentUser;
+        if (!user) return;
+        
+        const state = useStore.getState();
+        try {
+          const docRef = doc(db, 'users', user.uid, 'settings', 'config');
+          await setDoc(docRef, {
+            openRouterApiKey: state.openRouterApiKey,
+            groqApiKey: state.groqApiKey,
+            tavilyApiKey: state.tavilyApiKey,
+            exchangeRate: state.exchangeRate,
+            currency: state.currency,
+            agents: state.agents,
+            updatedAt: new Date().toISOString()
+          });
+        } catch (error) {
+          console.error("Error saving settings to Firestore:", error);
+          throw error;
+        }
+      },
     }),
     {
       name: 'ai-wealth-team-storage',

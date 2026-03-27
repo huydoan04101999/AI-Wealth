@@ -15,7 +15,8 @@ export default function Settings() {
     groqApiKey, setGroqApiKey, 
     tavilyApiKey, setTavilyApiKey,
     agents, updateAgent,
-    exchangeRate, setExchangeRate
+    exchangeRate, setExchangeRate,
+    loadSettingsFromFirestore, saveSettingsToFirestore
   } = useStore();
   
   const [openRouterInput, setOpenRouterInput] = useState(openRouterApiKey);
@@ -31,6 +32,10 @@ export default function Settings() {
   const [availableModels, setAvailableModels] = useState<OpenRouterModel[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [isFetchingRate, setIsFetchingRate] = useState(false);
+
+  useEffect(() => {
+    loadSettingsFromFirestore();
+  }, []);
 
   useEffect(() => {
     const fetchOpenRouterModels = async () => {
@@ -52,30 +57,50 @@ export default function Settings() {
     fetchOpenRouterModels();
   }, []);
 
-  const handleSaveOpenRouterKey = () => {
+  const handleSaveOpenRouterKey = async () => {
     setOpenRouterApiKey(openRouterInput);
-    setIsSavedOR(true);
-    setTimeout(() => setIsSavedOR(false), 2000);
+    try {
+      await saveSettingsToFirestore();
+      setIsSavedOR(true);
+      setTimeout(() => setIsSavedOR(false), 2000);
+    } catch (error) {
+      alert("Lỗi khi lưu vào Database");
+    }
   };
 
-  const handleSaveGroqKey = () => {
+  const handleSaveGroqKey = async () => {
     setGroqApiKey(groqInput);
-    setIsSavedGroq(true);
-    setTimeout(() => setIsSavedGroq(false), 2000);
+    try {
+      await saveSettingsToFirestore();
+      setIsSavedGroq(true);
+      setTimeout(() => setIsSavedGroq(false), 2000);
+    } catch (error) {
+      alert("Lỗi khi lưu vào Database");
+    }
   };
 
-  const handleSaveTavilyKey = () => {
+  const handleSaveTavilyKey = async () => {
     setTavilyApiKey(tavilyInput);
-    setIsSavedTavily(true);
-    setTimeout(() => setIsSavedTavily(false), 2000);
+    try {
+      await saveSettingsToFirestore();
+      setIsSavedTavily(true);
+      setTimeout(() => setIsSavedTavily(false), 2000);
+    } catch (error) {
+      alert("Lỗi khi lưu vào Database");
+    }
   };
 
-  const handleSaveRate = () => {
+  const handleSaveRate = async () => {
     const val = parseFloat(parseInputNumber(rateInput));
     if (!isNaN(val)) {
       setExchangeRate(val);
-      setIsSavedRate(true);
-      setTimeout(() => setIsSavedRate(false), 2000);
+      try {
+        await saveSettingsToFirestore();
+        setIsSavedRate(true);
+        setTimeout(() => setIsSavedRate(false), 2000);
+      } catch (error) {
+        alert("Lỗi khi lưu vào Database");
+      }
     }
   };
 
@@ -99,17 +124,18 @@ export default function Settings() {
     }
   };
 
-  const handleResetPrompt = (agentId: string) => {
+  const handleResetPrompt = async (agentId: string) => {
     const defaults: Record<string, string> = {
       cio: "Bạn là Giám đốc Đầu tư (CIO) của một quỹ quản lý tài sản cá nhân tại Việt Nam. Nhiệm vụ của bạn là lắng nghe báo cáo từ các chuyên viên phân tích, tổng hợp thông tin, và đưa ra quyết định phân bổ vốn (DCA) cuối cùng cho danh mục đa tài sản (Crypto, Vàng SJC/Nhẫn, Bất động sản Việt Nam, Tiền gửi ngân hàng nội địa). Hãy luôn giải thích ngắn gọn, logic và dứt khoát, bám sát tình hình kinh tế Việt Nam. Luôn sử dụng công cụ tìm kiếm để cập nhật các chỉ số kinh tế mới nhất trước khi đưa ra lời khuyên.",
       macro: "Bạn là Chuyên viên Phân tích Vĩ mô tập trung vào thị trường Việt Nam. Nhiệm vụ của bạn là phân tích các chỉ số kinh tế (CPI, GDP, lãi suất điều hành của NHNN), tỷ giá USD/VND, chính sách của Chính phủ và các sự kiện địa chính trị để dự báo xu hướng dòng tiền lớn, tác động lên các lớp tài sản tại Việt Nam. BẮT BUỘC sử dụng công cụ tìm kiếm để lấy các chỉ số CPI, lãi suất, tỷ giá mới nhất hôm nay, không được tự bịa số liệu.",
-      crypto: "Bạn là Chuyên viên Phân tích Tài sản tại Việt Nam. Nhiệm vụ của bạn là đánh giá chu kỳ của từng lớp tài sản (Bất động sản Việt Nam, Vàng miếng SJC, Vàng nhẫn, Crypto, Tiền gửi tiết kiệm). Phân tích dòng tiền, định giá, dữ liệu thị trường (on-chain cho crypto, cung cầu cho BĐS/Vàng nội địa) để đề xuất chiến lược phân bổ và luân chuyển vốn hiệu quả. Luôn tìm kiếm giá vàng SJC, giá Bitcoin và các tài sản khác theo thời gian thực.",
+      crypto: "Bạn là Chuyên viên Phân tích Tài sản tại Việt Nam. Nhiệm vụ của bạn là đánh giá chu kỳ của từng lớp tài sản (Bất động sản Việt Nam, Vàng miếng SJC, Vàng nhẫn, Crypto, Tiền gửi tiết kiệm). Phân tích dòng tiền, định giá, dữ liệu thị trường (on-chain cho crypto, cung cầu cho BĐS/Vàng nội địa) đề xuất chiến lược phân bổ và luân chuyển vốn hiệu quả. Luôn tìm kiếm giá vàng SJC, giá Bitcoin và các tài sản khác theo thời gian thực.",
       risk: "Bạn là Chuyên viên Quản trị Rủi ro tại Việt Nam. Nhiệm vụ của bạn là tìm ra những điểm yếu trong kế hoạch đầu tư, đánh giá rủi ro thanh khoản (BĐS Việt Nam), rủi ro biến động (Crypto), rủi ro lạm phát và tỷ giá (VND). Bạn luôn ưu tiên bảo vệ vốn, đa dạng hóa danh mục và đề xuất tỷ trọng an toàn phù hợp với tâm lý nhà đầu tư Việt. Sử dụng tìm kiếm để cập nhật các rủi ro vĩ mô mới nhất.",
       news: "Bạn là Chuyên viên Phân tích Tâm lý Thị trường Việt Nam. Nhiệm vụ của bạn là tổng hợp tin tức từ báo chí Việt Nam, chính sách nhà nước, và mạng xã hội (Facebook, Telegram) để đánh giá tâm lý đám đông (FOMO/FUD) đối với các kênh đầu tư (Sốt đất, đổ xô mua Vàng, đu đỉnh Crypto). Phát hiện các rủi ro tiềm ẩn từ tin đồn và sự kiện bất ngờ tại thị trường nội địa bằng cách tìm kiếm các tin tức nóng hổi nhất trong 24h qua."
     };
     
     if (defaults[agentId]) {
       updateAgent(agentId, { systemPrompt: defaults[agentId] });
+      await saveSettingsToFirestore();
     }
   };
 
@@ -286,12 +312,13 @@ export default function Settings() {
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Provider</label>
                     <select
                       value={agent.provider}
-                      onChange={(e) => {
+                      onChange={async (e) => {
                         const provider = e.target.value as 'openrouter' | 'groq';
                         const defaultModel = provider === 'openrouter' 
                           ? 'anthropic/claude-3.5-sonnet' 
                           : 'llama-3.3-70b-versatile';
                         updateAgent(agent.id, { provider, model: defaultModel });
+                        await saveSettingsToFirestore();
                       }}
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-700 focus:outline-none focus:border-emerald-500 transition-all"
                     >
@@ -306,10 +333,11 @@ export default function Settings() {
                     <div className="space-y-3">
                       <select
                         value={availableModels.some(m => m.id === agent.model) ? agent.model : 'custom'}
-                        onChange={(e) => {
+                        onChange={async (e) => {
                           const val = e.target.value;
                           if (val !== 'custom') {
                             updateAgent(agent.id, { model: val });
+                            await saveSettingsToFirestore();
                           }
                         }}
                         className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-700 focus:outline-none focus:border-emerald-500 transition-all"
@@ -331,7 +359,10 @@ export default function Settings() {
                         <input
                           type="text"
                           value={agent.model === 'custom' ? '' : agent.model}
-                          onChange={(e) => updateAgent(agent.id, { model: e.target.value })}
+                          onChange={async (e) => {
+                            updateAgent(agent.id, { model: e.target.value });
+                            await saveSettingsToFirestore();
+                          }}
                           placeholder="Nhập Model ID (vd: openai/gpt-4o)"
                           className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-mono focus:outline-none focus:border-emerald-500 transition-all"
                         />
@@ -341,7 +372,10 @@ export default function Settings() {
                     <input
                       type="text"
                       value={agent.model}
-                      onChange={(e) => updateAgent(agent.id, { model: e.target.value })}
+                      onChange={async (e) => {
+                        updateAgent(agent.id, { model: e.target.value });
+                        await saveSettingsToFirestore();
+                      }}
                       placeholder="Nhập Groq Model ID (vd: llama-3.3-70b-versatile)"
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-mono focus:outline-none focus:border-emerald-500 transition-all"
                     />
@@ -363,6 +397,9 @@ export default function Settings() {
                   <textarea
                     value={agent.systemPrompt}
                     onChange={(e) => updateAgent(agent.id, { systemPrompt: e.target.value })}
+                    onBlur={async () => {
+                      await saveSettingsToFirestore();
+                    }}
                     rows={4}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 focus:outline-none focus:border-emerald-500 transition-all resize-none leading-relaxed"
                   />

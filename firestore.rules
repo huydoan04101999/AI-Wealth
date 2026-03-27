@@ -103,6 +103,11 @@ service cloud.firestore {
                          isAdmin()
                        );
       allow delete: if isAdmin();
+
+      match /settings/config {
+        allow read: if isOwner(userId);
+        allow write: if isOwner(userId);
+      }
     }
   }
 }

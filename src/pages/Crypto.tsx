@@ -4,13 +4,15 @@ import {
   BrainCircuit, Target, AlertCircle, Clock, 
   ArrowRightLeft, Bot, LineChart as LineChartIcon,
   Zap, ShieldAlert, Info, Crown, ChevronUp, ChevronDown,
-  Calendar, RefreshCcw, Bitcoin
+  Calendar, RefreshCcw, Bitcoin, Loader2, Play
 } from 'lucide-react';
 import { 
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   ComposedChart, Bar, Cell, ErrorBar
 } from 'recharts';
 import { cn } from '../lib/utils';
+import { useStore } from '../store/useStore';
+import { callAI } from '../lib/ai';
 
 interface ChartDataPoint {
   date: string;
@@ -24,8 +26,13 @@ interface ChartDataPoint {
 }
 
 export default function Crypto() {
+  const { 
+    agents, openRouterApiKey, groqApiKey, tavilyApiKey 
+  } = useStore();
+  
   const [activeTab, setActiveTab] = useState<'overview' | 'agents' | 'dca'>('overview');
   const [timeframe, setTimeframe] = useState<'1' | '7' | '30' | '365'>('7');
+  const [globalProvider, setGlobalProvider] = useState<'default' | 'openrouter' | 'groq'>('default');
   const [btcData, setBtcData] = useState<{
     price: number;
     change24h: number;
@@ -37,6 +44,234 @@ export default function Crypto() {
   const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // AI Analysis State
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [agentResponses, setAgentResponses] = useState<Record<string, {
+    content: string;
+    status: 'idle' | 'thinking' | 'done' | 'error';
+    recommendation?: string;
+    confidence?: number;
+  }>>({
+    cio: { content: '', status: 'idle' },
+    macro: { content: '', status: 'idle' },
+    crypto: { content: '', status: 'idle' },
+    risk: { content: '', status: 'idle' },
+    news: { content: '', status: 'idle' }
+  });
+  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant', content: string }[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [isChatting, setIsChatting] = useState(false);
+  const [aiInsights, setAiInsights] = useState<{
+    fearGreedIndex: number;
+    fearGreedLabel: string;
+    positiveSignal: string;
+    riskSignal: string;
+    strategyForecast: string;
+    dcaZones: { label: string, range: string }[];
+    stopLoss: string;
+    takeProfit: string;
+  } | null>(null);
+
+  const runAIAnalysis = async () => {
+    if (!btcData) return;
+    
+    setIsAnalyzing(true);
+    setChatMessages([]); // Clear chat on new analysis
+    
+    // Reset responses
+    const initialResponses = { ...agentResponses };
+    Object.keys(initialResponses).forEach(key => {
+      initialResponses[key] = { ...initialResponses[key], status: 'thinking' };
+    });
+    setAgentResponses(initialResponses);
+
+    const btcContext = `
+Dữ liệu Bitcoin hiện tại:
+- Giá: ${formatCurrency(btcData.price)}
+- Thay đổi 24h: ${btcData.change24h.toFixed(2)}%
+- Vốn hóa: ${formatCurrency(btcData.marketCap)}
+- Khối lượng 24h: ${formatCurrency(btcData.volume24h)}
+- Cao nhất 24h: ${formatCurrency(btcData.high24h)}
+- Thấp nhất 24h: ${formatCurrency(btcData.low24h)}
+- Khung thời gian phân tích: ${timeframe === '1' ? '24h' : timeframe === '7' ? '7 ngày' : timeframe === '30' ? '1 tháng' : '1 năm'}
+`;
+
+    const runAgent = async (agentId: string, userPrompt: string) => {
+      const agent = agents.find(a => a.id === agentId);
+      if (!agent) return;
+
+      const provider = globalProvider === 'default' ? agent.provider : globalProvider;
+      const apiKey = provider === 'openrouter' ? openRouterApiKey : groqApiKey;
+      const model = globalProvider === 'default' 
+        ? agent.model 
+        : (globalProvider === 'openrouter' ? 'anthropic/claude-3.5-sonnet' : 'llama-3.3-70b-versatile');
+      
+      try {
+        const response = await callAI(
+          provider,
+          apiKey,
+          model,
+          agent.systemPrompt,
+          userPrompt,
+          tavilyApiKey
+        );
+
+        // Try to extract recommendation and confidence if possible
+        let recommendation = 'Nắm giữ';
+        let confidence = 85;
+
+        const lowerResponse = response.toLowerCase();
+        if (lowerResponse.includes('mua') || lowerResponse.includes('buy')) recommendation = 'Mua';
+        else if (lowerResponse.includes('bán') || lowerResponse.includes('sell')) recommendation = 'Bán';
+        else if (lowerResponse.includes('tích lũy') || lowerResponse.includes('accumulate')) recommendation = 'Tích lũy';
+        else if (lowerResponse.includes('nắm giữ') || lowerResponse.includes('hold')) recommendation = 'Nắm giữ';
+        
+        const confidenceMatch = response.match(/(\d+)%/);
+        if (confidenceMatch) confidence = parseInt(confidenceMatch[1]);
+
+        setAgentResponses(prev => ({
+          ...prev,
+          [agentId]: { content: response, status: 'done', recommendation, confidence }
+        }));
+        
+        return response;
+      } catch (err: any) {
+        console.error(`Error running agent ${agentId}:`, err);
+        setAgentResponses(prev => ({
+          ...prev,
+          [agentId]: { content: `Lỗi: ${err.message}`, status: 'error' }
+        }));
+        return null;
+      }
+    };
+
+    // Run specialized agents first
+    const [macroRes, cryptoRes, riskRes, newsRes] = await Promise.all([
+      runAgent('macro', `Hãy phân tích các yếu tố vĩ mô (lãi suất Fed, lạm phát, tỷ giá USD/VND) đang tác động đến Bitcoin. Sử dụng dữ liệu thực tế: ${btcContext}`),
+      runAgent('crypto', `Hãy phân tích kỹ thuật (RSI, Moving Averages) và dữ liệu on-chain (lượng BTC trên sàn, thợ đào) cho Bitcoin. Dữ liệu: ${btcContext}`),
+      runAgent('risk', `Hãy đánh giá các rủi ro hệ thống, rủi ro thanh khoản và rủi ro biến động cho Bitcoin lúc này. Dữ liệu: ${btcContext}`),
+      runAgent('news', `Hãy quét các tin tức nóng hổi nhất trong 24h qua và tâm lý cộng đồng (FUD/FOMO) về Bitcoin. Dữ liệu: ${btcContext}`)
+    ]);
+
+    // Finally run CIO to summarize
+    const cioPrompt = `
+Dưới đây là báo cáo từ các chuyên viên của bạn:
+
+[BÁO CÁO VĨ MÔ]
+${macroRes || 'Không có dữ liệu'}
+
+[BÁO CÁO TÀI SẢN/KỸ THUẬT]
+${cryptoRes || 'Không có dữ liệu'}
+
+[BÁO CÁO RỦI RO]
+${riskRes || 'Không có dữ liệu'}
+
+[BÁO CÁO TÂM LÝ]
+${newsRes || 'Không có dữ liệu'}
+
+Dựa trên các báo cáo trên và dữ liệu thị trường thực tế: ${btcContext}
+
+Nhiệm vụ của bạn là đưa ra QUYẾT ĐỊNH CUỐI CÙNG cho Bitcoin.
+Cấu trúc câu trả lời của bạn PHẢI bao gồm các mục sau (để hệ thống có thể trích xuất dữ liệu):
+1. QUYẾT ĐỊNH: [Mua / Bán / Nắm giữ / Tích lũy]
+2. ĐỘ TIN CẬY: [XX]%
+3. LÝ DO CHÍNH: (Tối đa 3 gạch đầu dòng dứt khoát)
+4. CHIẾN LƯỢC CỤ THỂ: (Lời khuyên hành động ngay bây giờ)
+5. CHỈ SỐ TÂM LÝ: [0-100] (Fear & Greed Index dự báo)
+6. TÍN HIỆU TÍCH CỰC: (1 câu ngắn gọn)
+7. RỦI RO NGẮN HẠN: (1 câu ngắn gọn)
+8. VÙNG DCA 1 (AN TOÀN): [Giá thấp - Giá cao]
+9. VÙNG DCA 2 (TRUNG BÌNH): [Giá thấp - Giá cao]
+10. MỨC CẮT LỖ (STOP LOSS): [Giá]
+11. MỤC TIÊU (TAKE PROFIT): [Giá]
+
+Hãy trả lời bằng tiếng Việt, phong cách chuyên nghiệp, quyết đoán của một CIO.
+`;
+
+    const cioRes = await runAgent('cio', cioPrompt);
+    
+    if (cioRes) {
+      // Parse AI Insights
+      const getMatch = (regex: RegExp) => {
+        const match = cioRes.match(regex);
+        return match ? match[1].trim() : null;
+      };
+
+      const fgIndex = parseInt(getMatch(/CHỈ SỐ TÂM LÝ:\s*(\d+)/) || '50');
+      let fgLabel = 'Trung lập';
+      if (fgIndex < 25) fgLabel = 'Cực kỳ sợ hãi';
+      else if (fgIndex < 45) fgLabel = 'Sợ hãi';
+      else if (fgIndex < 55) fgLabel = 'Trung lập';
+      else if (fgIndex < 75) fgLabel = 'Tham lam';
+      else fgLabel = 'Cực kỳ tham lam';
+
+      setAiInsights({
+        fearGreedIndex: fgIndex,
+        fearGreedLabel: fgLabel,
+        positiveSignal: getMatch(/TÍN HIỆU TÍCH CỰC:\s*(.*)/) || 'Đang chờ dữ liệu...',
+        riskSignal: getMatch(/RỦI RO NGẮN HẠN:\s*(.*)/) || 'Đang chờ dữ liệu...',
+        strategyForecast: getMatch(/CHIẾN LƯỢC CỤ THỂ:\s*(.*)/) || 'Đang chờ dữ liệu...',
+        dcaZones: [
+          { label: 'Vùng 1 (An toàn)', range: getMatch(/VÙNG DCA 1 \(AN TOÀN\):\s*(.*)/) || '---' },
+          { label: 'Vùng 2 (Trung bình)', range: getMatch(/VÙNG DCA 2 \(TRUNG BÌNH\):\s*(.*)/) || '---' }
+        ],
+        stopLoss: getMatch(/MỨC CẮT LỖ \(STOP LOSS\):\s*(.*)/) || '---',
+        takeProfit: getMatch(/MỤC TIÊU \(TAKE PROFIT\):\s*(.*)/) || '---'
+      });
+    }
+    
+    setIsAnalyzing(false);
+  };
+
+  const handleSendMessage = async () => {
+    if (!chatInput.trim() || isChatting || !agentResponses.cio.content) return;
+
+    const userMessage = chatInput.trim();
+    setChatMessages(prev => [...prev, { role: 'user', content: userMessage }]);
+    setChatInput('');
+    setIsChatting(true);
+
+    const cioAgent = agents.find(a => a.id === 'cio');
+    if (!cioAgent) return;
+
+    const provider = globalProvider === 'default' ? cioAgent.provider : globalProvider;
+    const apiKey = provider === 'openrouter' ? openRouterApiKey : groqApiKey;
+    const model = globalProvider === 'default' 
+      ? cioAgent.model 
+      : (globalProvider === 'openrouter' ? 'anthropic/claude-3.5-sonnet' : 'llama-3.3-70b-versatile');
+
+    try {
+      const chatHistory = chatMessages.map(m => `${m.role === 'user' ? 'Người dùng' : 'CIO'}: ${m.content}`).join('\n');
+      const prompt = `
+Bối cảnh phân tích Bitcoin hiện tại:
+${agentResponses.cio.content}
+
+Lịch sử trò chuyện:
+${chatHistory}
+
+Câu hỏi mới của người dùng: ${userMessage}
+
+Hãy trả lời ngắn gọn, chuyên nghiệp và bám sát bối cảnh phân tích trên.
+`;
+
+      const response = await callAI(
+        provider,
+        apiKey,
+        model,
+        cioAgent.systemPrompt,
+        prompt,
+        tavilyApiKey
+      );
+
+      setChatMessages(prev => [...prev, { role: 'assistant', content: response }]);
+    } catch (err: any) {
+      console.error("Chat error:", err);
+      setChatMessages(prev => [...prev, { role: 'assistant', content: `Lỗi: ${err.message}` }]);
+    } finally {
+      setIsChatting(false);
+    }
+  };
 
   useEffect(() => {
     const fetchData = async (retryCount = 0) => {
@@ -264,18 +499,27 @@ export default function Crypto() {
           </div>
           <div className={cn(
             "text-2xl font-bold flex items-center gap-2",
-            chartData.length > 0 && chartData[chartData.length - 1].close >= chartData[0].open ? "text-emerald-600" : "text-red-600"
+            agentResponses.cio.status === 'done' 
+              ? (agentResponses.cio.recommendation === 'Bán' ? "text-red-600" : "text-emerald-600")
+              : (chartData.length > 0 && chartData[chartData.length - 1].close >= chartData[0].open ? "text-emerald-600" : "text-red-600")
           )}>
-            {chartData.length > 0 && chartData[chartData.length - 1].close >= chartData[0].open ? (
+            {agentResponses.cio.status === 'done' ? (
               <>
-                <ChevronUp className="w-6 h-6" />
-                TĂNG GIÁ
+                {agentResponses.cio.recommendation === 'Bán' ? <ChevronDown className="w-6 h-6" /> : <ChevronUp className="w-6 h-6" />}
+                {agentResponses.cio.recommendation?.toUpperCase()}
               </>
             ) : (
-              <>
-                <ChevronDown className="w-6 h-6" />
-                GIẢM GIÁ
-              </>
+              chartData.length > 0 && chartData[chartData.length - 1].close >= chartData[0].open ? (
+                <>
+                  <ChevronUp className="w-6 h-6" />
+                  TĂNG GIÁ
+                </>
+              ) : (
+                <>
+                  <ChevronDown className="w-6 h-6" />
+                  GIẢM GIÁ
+                </>
+              )
             )}
           </div>
           <div className="mt-2 flex items-center text-sm">
@@ -411,11 +655,19 @@ export default function Crypto() {
               <div className="space-y-6">
                 <div className="p-4 rounded-xl bg-slate-50 border border-slate-100">
                   <div className="flex justify-between items-center mb-3">
-                    <span className="text-sm font-medium text-slate-600">Fear & Greed Index</span>
-                    <span className="text-sm font-bold text-orange-600">75 (Tham lam)</span>
+                    <span className="text-sm font-medium text-slate-600">Fear & Greed Index (AI)</span>
+                    <span className={cn(
+                      "text-sm font-bold",
+                      aiInsights ? (aiInsights.fearGreedIndex > 50 ? "text-emerald-600" : "text-red-600") : "text-orange-600"
+                    )}>
+                      {aiInsights ? `${aiInsights.fearGreedIndex} (${aiInsights.fearGreedLabel})` : '75 (Tham lam)'}
+                    </span>
                   </div>
                   <div className="w-full bg-slate-200 rounded-full h-2">
-                    <div className="bg-gradient-to-r from-emerald-500 via-amber-500 to-orange-600 h-2 rounded-full" style={{ width: '75%' }}></div>
+                    <div 
+                      className="bg-gradient-to-r from-emerald-500 via-amber-500 to-orange-600 h-2 rounded-full transition-all duration-1000" 
+                      style={{ width: `${aiInsights?.fearGreedIndex || 75}%` }}
+                    ></div>
                   </div>
                 </div>
 
@@ -426,7 +678,9 @@ export default function Crypto() {
                     </div>
                     <div>
                       <h4 className="text-sm font-bold text-slate-900">Tín hiệu Tích cực</h4>
-                      <p className="text-xs text-slate-500 mt-1">Lượng BTC trên các sàn tiếp tục giảm, cho thấy áp lực bán yếu.</p>
+                      <p className="text-xs text-slate-500 mt-1">
+                        {aiInsights?.positiveSignal || "Lượng BTC trên các sàn tiếp tục giảm, cho thấy áp lực bán yếu."}
+                      </p>
                     </div>
                   </div>
                   <div className="flex items-start gap-3">
@@ -435,16 +689,11 @@ export default function Crypto() {
                     </div>
                     <div>
                       <h4 className="text-sm font-bold text-slate-900">Rủi ro ngắn hạn</h4>
-                      <p className="text-xs text-slate-500 mt-1">Chỉ số RSI khung ngày đang ở mức cao, có thể có nhịp điều chỉnh kỹ thuật.</p>
+                      <p className="text-xs text-slate-500 mt-1">
+                        {aiInsights?.riskSignal || "Chỉ số RSI khung ngày đang ở mức cao, có thể có nhịp điều chỉnh kỹ thuật."}
+                      </p>
                     </div>
                   </div>
-                </div>
-
-                <div className="pt-4 border-t border-slate-100">
-                  <button className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold text-sm hover:bg-slate-800 transition-all flex items-center justify-center gap-2">
-                    <Bot className="w-4 h-4" />
-                    Hỏi AI về Bitcoin
-                  </button>
                 </div>
               </div>
             </div>
@@ -455,7 +704,7 @@ export default function Crypto() {
                 Dự báo Chiến lược
               </h3>
               <p className="text-xs text-indigo-100 leading-relaxed">
-                Bitcoin đang trong giai đoạn "Price Discovery" sau Halving. AI dự báo BTC sẽ dẫn dắt thị trường trong 3-6 tháng tới. Ưu tiên nắm giữ và chỉ chốt lời khi đạt các mốc Fibonacci quan trọng trên $100k.
+                {aiInsights?.strategyForecast || 'Bitcoin đang trong giai đoạn "Price Discovery" sau Halving. AI dự báo BTC sẽ dẫn dắt thị trường trong 3-6 tháng tới. Ưu tiên nắm giữ và chỉ chốt lời khi đạt các mốc Fibonacci quan trọng trên $100k.'}
               </p>
             </div>
           </div>
@@ -464,18 +713,157 @@ export default function Crypto() {
 
       {activeTab === 'agents' && (
         <div className="space-y-6">
+          {/* Chat with CIO Section */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="p-4 bg-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Bot className="w-5 h-5 text-indigo-400" />
+                <h3 className="font-bold text-sm">Hỏi đáp trực tiếp với CIO</h3>
+              </div>
+              <div className="flex items-center gap-4">
+                {chatMessages.length > 0 && (
+                  <button 
+                    onClick={() => setChatMessages([])}
+                    className="text-[10px] font-bold text-slate-400 hover:text-white transition-colors uppercase tracking-widest"
+                  >
+                    Xóa hội thoại
+                  </button>
+                )}
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Online</span>
+                </div>
+              </div>
+            </div>
+            <div className="p-4 h-[300px] overflow-y-auto bg-slate-50 space-y-4">
+              {agentResponses.cio.status === 'idle' ? (
+                <div className="flex flex-col items-center justify-center h-full text-slate-400 gap-2">
+                  <Activity className="w-8 h-8 opacity-20" />
+                  <p className="text-xs font-medium italic">Chưa có dữ liệu phân tích. Hãy chạy phân tích AI trước.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="flex gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center shrink-0">
+                      <Crown className="w-4 h-4 text-white" />
+                    </div>
+                    <div className="bg-white p-4 rounded-2xl rounded-tl-none border border-slate-200 shadow-sm max-w-[85%]">
+                      <p className="text-xs font-bold text-indigo-600 mb-1">Supreme Commander (CIO)</p>
+                      <div className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">
+                        Chào bạn, tôi đã sẵn sàng. Bạn có câu hỏi nào về báo cáo phân tích Bitcoin phía dưới không?
+                      </div>
+                    </div>
+                  </div>
+                  {chatMessages.map((msg, idx) => (
+                    <div key={idx} className={cn("flex gap-3", msg.role === 'user' ? "flex-row-reverse" : "")}>
+                      <div className={cn(
+                        "w-8 h-8 rounded-lg flex items-center justify-center shrink-0",
+                        msg.role === 'user' ? "bg-slate-200" : "bg-indigo-600"
+                      )}>
+                        {msg.role === 'user' ? <Activity className="w-4 h-4 text-slate-600" /> : <Crown className="w-4 h-4 text-white" />}
+                      </div>
+                      <div className={cn(
+                        "p-4 rounded-2xl border shadow-sm max-w-[85%]",
+                        msg.role === 'user' ? "bg-indigo-50 border-indigo-100 rounded-tr-none" : "bg-white border-slate-200 rounded-tl-none"
+                      )}>
+                        <p className={cn("text-[10px] font-bold mb-1", msg.role === 'user' ? "text-indigo-600 text-right" : "text-indigo-600")}>
+                          {msg.role === 'user' ? "BẠN" : "CIO"}
+                        </p>
+                        <div className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">
+                          {msg.content}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {isChatting && (
+                    <div className="flex gap-3">
+                      <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center shrink-0">
+                        <Loader2 className="w-4 h-4 text-white animate-spin" />
+                      </div>
+                      <div className="bg-white p-4 rounded-2xl rounded-tl-none border border-slate-200 shadow-sm">
+                        <div className="flex gap-1">
+                          <span className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce"></span>
+                          <span className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce [animation-delay:0.2s]"></span>
+                          <span className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce [animation-delay:0.4s]"></span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="p-4 border-t border-slate-100 bg-white">
+              <form 
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleSendMessage();
+                }}
+                className="flex gap-2"
+              >
+                <input 
+                  type="text" 
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  placeholder={agentResponses.cio.status === 'idle' ? "Hãy chạy phân tích trước khi đặt câu hỏi..." : "Nhập câu hỏi của bạn cho CIO..."}
+                  disabled={agentResponses.cio.status === 'idle' || isChatting}
+                  className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500/50 transition-all disabled:opacity-50"
+                />
+                <button 
+                  type="submit"
+                  disabled={agentResponses.cio.status === 'idle' || isChatting || !chatInput.trim()}
+                  className="p-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-all disabled:opacity-50"
+                >
+                  <ArrowRightLeft className="w-5 h-5 rotate-90" />
+                </button>
+              </form>
+            </div>
+          </div>
+
           <div className="bg-indigo-900 rounded-2xl p-8 text-white relative overflow-hidden">
             <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-600 rounded-full opacity-20 blur-3xl -mr-20 -mt-20"></div>
             <div className="absolute bottom-0 left-0 w-40 h-40 bg-purple-500 rounded-full opacity-20 blur-3xl -ml-10 -mb-10"></div>
             
-            <div className="relative z-10">
-              <div className="flex items-center gap-3 mb-4">
-                <Bot className="w-8 h-8 text-indigo-300" />
-                <h2 className="text-2xl font-bold">Bitcoin AI Multi-Agent System</h2>
+            <div className="relative z-10 flex flex-col md:flex-row justify-between items-center gap-6">
+              <div>
+                <div className="flex items-center gap-3 mb-4">
+                  <Bot className="w-8 h-8 text-indigo-300" />
+                  <h2 className="text-2xl font-bold">Bitcoin AI Multi-Agent System</h2>
+                </div>
+                <div className="flex flex-wrap items-center gap-4">
+                  <p className="text-indigo-200 max-w-xl">
+                    Hệ thống AI chuyên biệt phân tích Bitcoin từ dữ liệu On-chain, Kinh tế vĩ mô và Phân tích kỹ thuật thời gian thực.
+                  </p>
+                  <div className="flex items-center gap-2 bg-indigo-800/50 p-1.5 rounded-xl border border-indigo-700/50">
+                    <span className="text-[10px] font-black text-indigo-300 uppercase tracking-widest ml-2">Provider:</span>
+                    <select 
+                      value={globalProvider}
+                      onChange={(e) => setGlobalProvider(e.target.value as any)}
+                      className="bg-indigo-900 text-white text-xs font-bold px-3 py-1.5 rounded-lg border-none focus:ring-1 focus:ring-indigo-400 outline-none cursor-pointer"
+                    >
+                      <option value="default">Theo Cài đặt</option>
+                      <option value="openrouter">OpenRouter (Claude 3.5)</option>
+                      <option value="groq">Groq (Llama 3.3)</option>
+                    </select>
+                  </div>
+                </div>
               </div>
-              <p className="text-indigo-200 max-w-2xl">
-                Hệ thống AI chuyên biệt phân tích Bitcoin từ dữ liệu On-chain, Kinh tế vĩ mô và Phân tích kỹ thuật thời gian thực.
-              </p>
+              <button
+                onClick={runAIAnalysis}
+                disabled={isAnalyzing}
+                className="px-8 py-4 bg-white text-indigo-900 rounded-2xl font-black uppercase tracking-wider flex items-center gap-3 hover:bg-indigo-50 transition-all shadow-xl disabled:opacity-50"
+              >
+                {isAnalyzing ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    Đang phân tích...
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-5 h-5 fill-current" />
+                    Chạy Phân tích AI
+                  </>
+                )}
+              </button>
             </div>
           </div>
 
@@ -496,114 +884,111 @@ export default function Crypto() {
                 
                 <div className="flex-1 text-center md:text-left">
                   <div className="flex flex-wrap items-center justify-center md:justify-start gap-3 mb-3">
-                    <h3 className="text-2xl font-black text-white tracking-tight uppercase">Supreme Commander</h3>
+                    <h3 className="text-2xl font-black text-white tracking-tight uppercase">Supreme Commander (CIO)</h3>
                     <span className="px-3 py-1 rounded-full bg-indigo-500/20 text-indigo-300 text-[10px] font-black uppercase tracking-widest border border-indigo-500/30">Decision Maker</span>
                   </div>
-                  <p className="text-slate-400 text-sm leading-relaxed max-w-3xl">
-                    "Sau khi tổng hợp dữ liệu từ các Agent chuyên biệt, tôi xác nhận Bitcoin đang trong chu kỳ tích lũy cuối cùng trước khi bứt phá. Tín hiệu On-chain mạnh mẽ kết hợp với bối cảnh vĩ mô thuận lợi cho thấy xác suất tăng trưởng lên $85,000 trong 30 ngày tới là 89%. Khuyến nghị: Duy trì vị thế Long và tích lũy thêm tại các nhịp điều chỉnh nhẹ."
-                  </p>
+                  <div className="text-slate-400 text-sm leading-relaxed max-w-3xl">
+                    {agentResponses.cio.status === 'thinking' ? (
+                      <div className="flex items-center gap-2 animate-pulse">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Đang tổng hợp báo cáo và đưa ra quyết định...
+                      </div>
+                    ) : agentResponses.cio.status === 'idle' ? (
+                      "Nhấn 'Chạy Phân tích AI' để nhận quyết định cuối cùng từ Giám đốc Đầu tư."
+                    ) : (
+                      <div className="whitespace-pre-wrap">{agentResponses.cio.content}</div>
+                    )}
+                  </div>
                 </div>
 
-                <div className="shrink-0 bg-white/5 rounded-2xl p-6 border border-white/10 backdrop-blur-sm min-w-[200px]">
+                <div className="shrink-0 bg-white/5 rounded-2xl p-6 border border-white/10 backdrop-blur-sm min-w-[200px] flex flex-col items-center justify-center text-center">
                   <div className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-4">Final Verdict</div>
-                  <div className="flex items-center gap-3 text-emerald-400 mb-2">
-                    <TrendingUp className="w-6 h-6" />
-                    <span className="text-2xl font-black uppercase tracking-tighter">Strong Buy</span>
-                  </div>
-                  <div className="text-[10px] text-slate-500 font-bold">Confidence Score: 94.8%</div>
+                  {agentResponses.cio.status === 'done' ? (
+                    <>
+                      <div className={cn(
+                        "flex items-center gap-3 mb-2",
+                        agentResponses.cio.recommendation === 'Bán' ? "text-red-400" : "text-emerald-400"
+                      )}>
+                        {agentResponses.cio.recommendation === 'Bán' ? <ChevronDown className="w-8 h-8" /> : <ChevronUp className="w-8 h-8" />}
+                        <span className="text-3xl font-black uppercase tracking-tighter">{agentResponses.cio.recommendation}</span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 font-bold bg-white/5 px-3 py-1 rounded-full border border-white/5">
+                        Confidence Score: {agentResponses.cio.confidence}%
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-slate-500 text-sm font-bold italic animate-pulse">Chờ phân tích...</div>
+                  )}
                 </div>
               </div>
             </div>
 
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
-              <div className="p-5 border-b border-slate-100 bg-slate-50/50 flex justify-between items-start">
-                <div>
-                  <h3 className="font-bold text-slate-900 text-lg">On-chain Specialist</h3>
-                  <p className="text-xs text-slate-500 font-medium mt-1">Phân tích mạng lưới Bitcoin</p>
-                </div>
-                <div className="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-700">
-                  ACTIVE
-                </div>
-              </div>
-              <div className="p-5 flex-1 flex flex-col">
-                <div className="flex-1">
-                  <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Insight mới nhất</h4>
-                  <p className="text-sm text-slate-700 leading-relaxed">
-                    "Lượng BTC được rút khỏi các sàn giao dịch tăng mạnh. Các ví cá voi đang tích lũy thêm 25,000 BTC trong 48 giờ qua. Đây là tín hiệu cực kỳ lạc quan cho xu hướng dài hạn."
-                  </p>
-                </div>
-                <div className="mt-6 pt-4 border-t border-slate-100 flex items-center justify-between">
+            {/* Specialized Agents */}
+            {[
+              { id: 'crypto', name: 'On-chain Specialist', desc: 'Phân tích mạng lưới Bitcoin', color: 'emerald' },
+              { id: 'macro', name: 'Macro Strategist', desc: 'Phân tích Kinh tế vĩ mô', color: 'blue' },
+              { id: 'news', name: 'Sentiment Analyst', desc: 'Phân tích Tâm lý & Tin tức', color: 'purple' },
+              { id: 'risk', name: 'Risk Manager', desc: 'Quản trị Rủi ro', color: 'amber' }
+            ].map((agent) => (
+              <div key={agent.id} className="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
+                <div className="p-5 border-b border-slate-100 bg-slate-50/50 flex justify-between items-start">
                   <div>
-                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Khuyến nghị</div>
-                    <div className="font-bold text-sm text-emerald-600 uppercase">Gom hàng mạnh</div>
+                    <h3 className="font-bold text-slate-900 text-lg">{agent.name}</h3>
+                    <div className="flex items-center gap-2 mt-1">
+                      <p className="text-xs text-slate-500 font-medium">{agent.desc}</p>
+                      <span className="text-[10px] font-bold text-slate-300">•</span>
+                      <span className="text-[10px] font-bold text-indigo-500 uppercase tracking-tight">
+                        {globalProvider === 'default' ? agents.find(a => a.id === agent.id)?.model.split('/').pop() : (globalProvider === 'openrouter' ? 'Claude 3.5' : 'Llama 3.3')}
+                      </span>
+                    </div>
                   </div>
-                  <div className="text-right">
-                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Độ tin cậy</div>
-                    <div className="font-bold text-sm text-slate-900">92%</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
-              <div className="p-5 border-b border-slate-100 bg-slate-50/50 flex justify-between items-start">
-                <div>
-                  <h3 className="font-bold text-slate-900 text-lg">Macro Strategist</h3>
-                  <p className="text-xs text-slate-500 font-medium mt-1">Phân tích Kinh tế vĩ mô</p>
-                </div>
-                <div className="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-700">
-                  ACTIVE
-                </div>
-              </div>
-              <div className="p-5 flex-1 flex flex-col">
-                <div className="flex-1">
-                  <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Insight mới nhất</h4>
-                  <p className="text-sm text-slate-700 leading-relaxed">
-                    "Chỉ số lạm phát hạ nhiệt củng cố khả năng FED cắt giảm lãi suất. Bitcoin đang được xem là 'Vàng kỹ thuật' trong bối cảnh bất ổn địa chính trị toàn cầu."
-                  </p>
-                </div>
-                <div className="mt-6 pt-4 border-t border-slate-100 flex items-center justify-between">
-                  <div>
-                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Khuyến nghị</div>
-                    <div className="font-bold text-sm text-indigo-600 uppercase">Nắm giữ (HODL)</div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Độ tin cậy</div>
-                    <div className="font-bold text-sm text-slate-900">88%</div>
+                  <div className={cn(
+                    "px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider",
+                    agentResponses[agent.id].status === 'thinking' ? "bg-blue-100 text-blue-700 animate-pulse" :
+                    agentResponses[agent.id].status === 'done' ? "bg-emerald-100 text-emerald-700" :
+                    "bg-slate-100 text-slate-500"
+                  )}>
+                    {agentResponses[agent.id].status === 'thinking' ? 'THINKING' : 
+                     agentResponses[agent.id].status === 'done' ? 'ACTIVE' : 'IDLE'}
                   </div>
                 </div>
-              </div>
-            </div>
-
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden">
-              <div className="p-5 border-b border-slate-100 bg-slate-50/50 flex justify-between items-start">
-                <div>
-                  <h3 className="font-bold text-slate-900 text-lg">Technical Master</h3>
-                  <p className="text-xs text-slate-500 font-medium mt-1">Phân tích Kỹ thuật nâng cao</p>
-                </div>
-                <div className="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-700">
-                  WARNING
-                </div>
-              </div>
-              <div className="p-5 flex-1 flex flex-col">
-                <div className="flex-1">
-                  <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Insight mới nhất</h4>
-                  <p className="text-sm text-slate-700 leading-relaxed">
-                    "BTC đang gặp kháng cự mạnh tại vùng đỉnh cũ. Có thể xuất hiện nhịp 'Shakeout' để thanh lý các lệnh Long đòn bẩy cao trước khi bứt phá lên mốc $80,000."
-                  </p>
-                </div>
-                <div className="mt-6 pt-4 border-t border-slate-100 flex items-center justify-between">
-                  <div>
-                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Khuyến nghị</div>
-                    <div className="font-bold text-sm text-amber-600 uppercase">Cẩn trọng</div>
+                <div className="p-5 flex-1 flex flex-col">
+                  <div className="flex-1">
+                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Insight mới nhất</h4>
+                    <div className="text-sm text-slate-700 leading-relaxed">
+                      {agentResponses[agent.id].status === 'thinking' ? (
+                        <div className="space-y-2">
+                          <div className="h-4 bg-slate-100 rounded w-full animate-pulse"></div>
+                          <div className="h-4 bg-slate-100 rounded w-5/6 animate-pulse"></div>
+                          <div className="h-4 bg-slate-100 rounded w-4/6 animate-pulse"></div>
+                        </div>
+                      ) : agentResponses[agent.id].status === 'idle' ? (
+                        "Chờ lệnh phân tích..."
+                      ) : (
+                        <div className="line-clamp-6">{agentResponses[agent.id].content}</div>
+                      )}
+                    </div>
                   </div>
-                  <div className="text-right">
-                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Độ tin cậy</div>
-                    <div className="font-bold text-sm text-slate-900">81%</div>
+                  <div className="mt-6 pt-4 border-t border-slate-100 flex items-center justify-between">
+                    <div>
+                      <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Khuyến nghị</div>
+                      <div className={cn(
+                        "font-bold text-sm uppercase",
+                        agentResponses[agent.id].recommendation === 'Bán' ? "text-red-600" : "text-emerald-600"
+                      )}>
+                        {agentResponses[agent.id].recommendation || '---'}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Độ tin cậy</div>
+                      <div className="font-bold text-sm text-slate-900">
+                        {agentResponses[agent.id].confidence ? `${agentResponses[agent.id].confidence}%` : '---'}
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
+            ))}
           </div>
         </div>
       )}
@@ -625,16 +1010,33 @@ export default function Crypto() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 <div className="space-y-6">
                   <div>
-                    <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4">Vùng mua đề xuất</h4>
+                    <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4">Vùng mua đề xuất (AI)</h4>
                     <div className="space-y-3">
-                      <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-100 flex justify-between items-center">
-                        <span className="text-sm font-medium text-slate-700">Vùng 1 (An toàn)</span>
-                        <span className="font-bold text-emerald-700">{formatCurrency((btcData?.price || 0) * 0.9)} - {formatCurrency((btcData?.price || 0) * 0.95)}</span>
-                      </div>
-                      <div className="p-4 rounded-xl bg-blue-50 border border-blue-100 flex justify-between items-center">
-                        <span className="text-sm font-medium text-slate-700">Vùng 2 (Trung bình)</span>
-                        <span className="font-bold text-blue-700">{formatCurrency((btcData?.price || 0) * 0.96)} - {formatCurrency((btcData?.price || 0) * 0.98)}</span>
-                      </div>
+                      {aiInsights ? (
+                        aiInsights.dcaZones.map((zone, idx) => (
+                          <div key={idx} className={cn(
+                            "p-4 rounded-xl border flex justify-between items-center",
+                            idx === 0 ? "bg-emerald-50 border-emerald-100" : "bg-blue-50 border-blue-100"
+                          )}>
+                            <span className="text-sm font-medium text-slate-700">{zone.label}</span>
+                            <span className={cn(
+                              "font-bold",
+                              idx === 0 ? "text-emerald-700" : "text-blue-700"
+                            )}>{zone.range}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <>
+                          <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-100 flex justify-between items-center">
+                            <span className="text-sm font-medium text-slate-700">Vùng 1 (An toàn)</span>
+                            <span className="font-bold text-emerald-700">{formatCurrency((btcData?.price || 0) * 0.9)} - {formatCurrency((btcData?.price || 0) * 0.95)}</span>
+                          </div>
+                          <div className="p-4 rounded-xl bg-blue-50 border border-blue-100 flex justify-between items-center">
+                            <span className="text-sm font-medium text-slate-700">Vùng 2 (Trung bình)</span>
+                            <span className="font-bold text-blue-700">{formatCurrency((btcData?.price || 0) * 0.96)} - {formatCurrency((btcData?.price || 0) * 0.98)}</span>
+                          </div>
+                        </>
+                      )}
                       <div className="p-4 rounded-xl bg-slate-50 border border-slate-100 flex justify-between items-center opacity-60">
                         <span className="text-sm font-medium text-slate-700">Vùng 3 (Giá hiện tại)</span>
                         <span className="font-bold text-slate-700">{formatCurrency(btcData?.price || 0)}</span>
@@ -676,14 +1078,14 @@ export default function Crypto() {
             <div className="space-y-6">
               <div className="p-4 rounded-xl bg-slate-800/50 border border-slate-700">
                 <div className="text-xs text-slate-400 uppercase font-bold mb-2">Mức cắt lỗ (Stop Loss)</div>
-                <div className="text-xl font-bold text-red-400">{formatCurrency((btcData?.price || 0) * 0.85)}</div>
-                <p className="text-[10px] text-slate-500 mt-1">Dưới vùng hỗ trợ cứng 30 ngày.</p>
+                <div className="text-xl font-bold text-red-400">{aiInsights?.stopLoss || formatCurrency((btcData?.price || 0) * 0.85)}</div>
+                <p className="text-[10px] text-slate-500 mt-1">Dựa trên phân tích rủi ro AI.</p>
               </div>
 
               <div className="p-4 rounded-xl bg-slate-800/50 border border-slate-700">
                 <div className="text-xs text-slate-400 uppercase font-bold mb-2">Mục tiêu (Take Profit)</div>
-                <div className="text-xl font-bold text-emerald-400">$100,000 - $120,000</div>
-                <p className="text-[10px] text-slate-500 mt-1">Dự báo đỉnh chu kỳ hiện tại.</p>
+                <div className="text-xl font-bold text-emerald-400">{aiInsights?.takeProfit || "$100,000 - $120,000"}</div>
+                <p className="text-[10px] text-slate-500 mt-1">Dự báo mục tiêu chu kỳ AI.</p>
               </div>
 
               <div className="pt-4">

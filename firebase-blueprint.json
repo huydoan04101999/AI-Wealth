@@ -13,12 +13,29 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["uid", "email", "username", "role", "status", "createdAt"]
+    },
+    "UserSettings": {
+      "title": "UserSettings",
+      "description": "User API keys and agent configurations",
+      "type": "object",
+      "properties": {
+        "openRouterApiKey": { "type": "string" },
+        "groqApiKey": { "type": "string" },
+        "tavilyApiKey": { "type": "string" },
+        "exchangeRate": { "type": "number" },
+        "currency": { "type": "string", "enum": ["USD", "VND"] },
+        "agents": { "type": "array", "description": "List of agent configurations" }
+      }
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": { "$ref": "#/entities/User" },
       "description": "User profiles"
+    },
+    "/users/{userId}/settings/config": {
+      "schema": { "$ref": "#/entities/UserSettings" },
+      "description": "User application settings"
     }
   }
 }

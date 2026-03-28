@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Database, AlertCircle, TrendingUp, ArrowDownRight, ArrowUpRight, Edit2, Trash2, Calendar, X, History, ShieldCheck, ShieldAlert } from 'lucide-react';
+import { Plus, Database, AlertCircle, TrendingUp, ArrowDownRight, ArrowUpRight, Edit2, Trash2, Calendar, X, History, ShieldCheck, ShieldAlert, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useStore } from '../store/useStore';
 import { formatCurrency, parseInputNumber } from '../lib/format';
@@ -49,6 +49,8 @@ export default function Portfolio() {
 
   // Form state
   const [isAdding, setIsAdding] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
   const [editingId, setEditingId] = useState<number | null>(null);
   const [confirmModal, setConfirmModal] = useState<{ isOpen: boolean; title: string; message: string; onConfirm: () => void } | null>(null);
   const [formData, setFormData] = useState({
@@ -124,6 +126,32 @@ export default function Portfolio() {
     }, 60000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    const autoSettle = async () => {
+      const matured = transactions.filter(t => {
+        if (t.asset_type !== 'bank' || t.transaction_type !== 'deposit' || t.status === 'settled') return false;
+        if (!t.term) return false;
+        
+        const maturityDate = new Date(t.date);
+        maturityDate.setMonth(maturityDate.getMonth() + t.term);
+        return maturityDate <= new Date();
+      });
+      
+      if (matured.length > 0) {
+        let changed = false;
+        for (const t of matured) {
+          const success = await settleMaturedDeposit(t);
+          if (success) changed = true;
+        }
+        if (changed) fetchTransactions();
+      }
+    };
+    
+    if (transactions.length > 0) {
+      autoSettle();
+    }
+  }, [transactions.length]);
 
   const handleSaveAsset = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -275,43 +303,67 @@ export default function Portfolio() {
       title: 'Tất toán khoản tiền gửi',
       message: 'Bạn có chắc chắn muốn tất toán khoản tiền gửi này?',
       onConfirm: async () => {
-        const currentValueInUsd = calculateCurrentValue(depositTx);
-        const currentValueInOriginalCurrency = depositTx.currency === 'VND' ? currentValueInUsd * exchangeRate : currentValueInUsd;
-        
-        try {
-          const res = await fetchApi('/api/portfolio/transactions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              asset_type: 'bank',
-              asset_symbol: depositTx.asset_symbol,
-              transaction_type: 'withdraw',
-              amount: currentValueInOriginalCurrency.toString(),
-              price_per_unit: '1',
-              currency: depositTx.currency,
-              date: new Date().toISOString().split('T')[0],
-              linked_id: depositTx.id
-            })
-          });
-          
-          if (!res.ok) throw new Error('Failed to create withdraw transaction');
-          
-          await fetchApi(`/api/portfolio/transactions/${depositTx.id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              ...depositTx,
-              status: 'settled'
-            })
-          });
-          
-          fetchTransactions();
-        } catch (err: any) {
-          console.error(err);
-        }
+        await settleMaturedDeposit(depositTx);
         setConfirmModal(null);
+        fetchTransactions();
       }
     });
+  };
+
+  const settleMaturedDeposit = async (depositTx: Transaction) => {
+    const currentValueInUsd = calculateCurrentValue(depositTx);
+    const currentValueInOriginalCurrency = depositTx.currency === 'VND' ? currentValueInUsd * exchangeRate : currentValueInUsd;
+    
+    try {
+      // 1. Create withdraw from bank
+      const res = await fetchApi('/api/portfolio/transactions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          asset_type: 'bank',
+          asset_symbol: depositTx.asset_symbol,
+          transaction_type: 'withdraw',
+          amount: currentValueInOriginalCurrency.toString(),
+          price_per_unit: '1',
+          currency: depositTx.currency,
+          date: new Date().toISOString().split('T')[0],
+          linked_id: depositTx.id
+        })
+      });
+      
+      if (!res.ok) throw new Error('Failed to create withdraw transaction');
+
+      // 2. Create deposit to cash
+      await fetchApi('/api/portfolio/transactions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          asset_type: 'cash',
+          asset_symbol: 'Tiền mặt',
+          transaction_type: 'deposit',
+          amount: currentValueInOriginalCurrency.toString(),
+          price_per_unit: '1',
+          currency: depositTx.currency,
+          date: new Date().toISOString().split('T')[0],
+          linked_id: depositTx.id
+        })
+      });
+      
+      // 3. Mark original deposit as settled
+      await fetchApi(`/api/portfolio/transactions/${depositTx.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...depositTx,
+          status: 'settled'
+        })
+      });
+      
+      return true;
+    } catch (err: any) {
+      console.error(err);
+      return false;
+    }
   };
 
   const calculateCurrentValue = (tx: Transaction) => {
@@ -379,7 +431,7 @@ export default function Portfolio() {
   };
 
   const getCurrentPrice = (symbol: string, type: string) => {
-    if (type === 'bank') return 1;
+    if (type === 'bank' || type === 'cash') return 1;
     const assetDef = assetDefinitions.find(a => a.symbol === symbol);
     if (assetDef) {
       return parseFloat(assetDef.current_price);
@@ -422,12 +474,13 @@ export default function Portfolio() {
   let inflationScore = 0;
   if (totalPortfolioValue > 0) {
     const bankWeight = (assetTotals['bank'] || 0) / totalPortfolioValue;
+    const cashWeight = (assetTotals['cash'] || 0) / totalPortfolioValue;
     const cryptoWeight = (assetTotals['crypto'] || 0) / totalPortfolioValue;
     const goldWeight = (assetTotals['gold'] || 0) / totalPortfolioValue;
     const realEstateWeight = (assetTotals['real_estate'] || 0) / totalPortfolioValue;
 
     // Weighted average score (0-10)
-    inflationScore = (bankWeight * 1) + (cryptoWeight * 8) + (goldWeight * 9) + (realEstateWeight * 10);
+    inflationScore = (bankWeight * 1) + (cashWeight * 1) + (cryptoWeight * 8) + (goldWeight * 9) + (realEstateWeight * 10);
   }
 
   const getScoreColor = (score: number) => {
@@ -452,27 +505,67 @@ export default function Portfolio() {
   const holdings = React.useMemo(() => {
     const map = new Map<string, any>();
     
+    // First pass: Process all deposits and buys to establish holdings
     transactions.forEach(tx => {
       if (tx.asset_type === 'bank') {
-        // For bank, group by individual deposit transaction if it's a deposit
-        // Withdrawals will be matched by linked_id or just ignored if we use status
         if (tx.transaction_type === 'deposit') {
           const amount = parseFloat(tx.amount);
           const price = parseFloat(tx.price_per_unit);
           const txCurrency = tx.currency || 'USD';
           const valueInUsd = txCurrency === 'VND' ? (amount * price) / exchangeRate : (amount * price);
           
+          const startDate = new Date(tx.date);
+          const now = new Date();
+          const diffTime = Math.max(0, now.getTime() - startDate.getTime());
+          const diffDays = diffTime / (1000 * 60 * 60 * 24);
+          const termInMonths = tx.term || 0;
+          const isMatured = termInMonths > 0 && diffDays >= (termInMonths * 30);
+
           map.set(`bank-${tx.id}`, {
             id: `bank-${tx.id}`,
             asset_type: 'bank',
             asset_symbol: tx.asset_symbol,
             totalAmount: amount,
-            totalInvested: valueInUsd, // Original deposited amount
+            totalInvested: valueInUsd,
             currentValue: calculateCurrentValue(tx),
             transactions: [tx],
             status: tx.status || 'active',
-            depositTx: tx
+            depositTx: tx,
+            isMatured,
+            loanAmount: 0,
+            loanCurrentValue: 0
           });
+        }
+      } else if (tx.asset_type === 'cash') {
+        const key = 'cash-total';
+        if (!map.has(key)) {
+          map.set(key, {
+            id: key,
+            asset_type: 'cash',
+            asset_symbol: 'Tiền mặt',
+            totalAmount: 0,
+            totalInvested: 0,
+            currentValue: 0,
+            transactions: [],
+            loanAmount: 0,
+            loanCurrentValue: 0
+          });
+        }
+        const holding = map.get(key);
+        holding.transactions.push(tx);
+        const amount = parseFloat(tx.amount);
+        const price = parseFloat(tx.price_per_unit);
+        const txCurrency = tx.currency || 'USD';
+        const valueInUsd = txCurrency === 'VND' ? (amount * price) / exchangeRate : (amount * price);
+        
+        if (tx.transaction_type === 'deposit') {
+          holding.totalAmount += amount;
+          holding.totalInvested += valueInUsd;
+          holding.currentValue += valueInUsd;
+        } else if (tx.transaction_type === 'withdraw') {
+          holding.totalAmount -= amount;
+          holding.totalInvested -= valueInUsd;
+          holding.currentValue -= valueInUsd;
         }
       } else {
         const key = `${tx.asset_type}-${tx.asset_symbol}`;
@@ -506,20 +599,35 @@ export default function Portfolio() {
           holding.totalInvested -= valueInUsd;
         } else if (tx.transaction_type === 'borrow') {
           holding.loanAmount += amount;
-          holding.totalInvested -= valueInUsd; // Loan reduces out-of-pocket investment
+          holding.totalInvested -= valueInUsd;
         } else if (tx.transaction_type === 'repay') {
           holding.loanAmount -= amount;
-          holding.totalInvested += valueInUsd; // Repayment increases out-of-pocket investment
+          holding.totalInvested += valueInUsd;
+        }
+      }
+    });
+
+    // Second pass: Process bank withdrawals that are linked to deposits
+    transactions.forEach(tx => {
+      if (tx.asset_type === 'bank' && tx.transaction_type === 'withdraw' && tx.linked_id) {
+        const holdingKey = `bank-${tx.linked_id}`;
+        const holding = map.get(holdingKey);
+        if (holding) {
+          holding.transactions.push(tx);
+          const amount = parseFloat(tx.amount);
+          holding.totalAmount -= amount;
+          // Note: currentValue is already calculated by calculateCurrentValue(tx) in first pass if it's a deposit
+          // But we might need to recalculate it if it's partially withdrawn
+          holding.currentValue = calculateCurrentValue(holding.depositTx);
         }
       }
     });
     
     map.forEach(holding => {
-      if (holding.asset_type !== 'bank') {
+      if (holding.asset_type !== 'bank' && holding.asset_type !== 'cash') {
         const currentPriceInUsd = getCurrentPrice(holding.asset_symbol, holding.asset_type);
         let assetValue = holding.totalAmount * currentPriceInUsd;
         
-        // Subtract current value of loans
         let loanCurrentValue = 0;
         holding.transactions.forEach((tx: Transaction) => {
           if (tx.transaction_type === 'borrow') {
@@ -536,8 +644,9 @@ export default function Portfolio() {
     });
     
     return Array.from(map.values()).filter(h => 
-      (h.asset_type === 'bank' && h.status === 'active') || 
-      (h.asset_type !== 'bank' && h.totalAmount > 0)
+      (h.asset_type === 'bank' && h.status !== 'settled') || 
+      (h.asset_type === 'cash' && Math.abs(h.totalAmount) > 0.01) ||
+      (h.asset_type !== 'bank' && h.asset_type !== 'cash' && h.totalAmount > 0)
     );
   }, [transactions, assetDefinitions, marketPrices, exchangeRate, currency]);
 
@@ -626,7 +735,9 @@ export default function Portfolio() {
                 interest_rate: '',
                 term: '',
                 date: new Date().toISOString().split('T')[0],
-                currency: 'USD'
+                currency: 'USD',
+                status: 'active',
+                linked_id: ''
               });
             }}
             className="flex items-center gap-2 bg-slate-900 hover:bg-slate-800 text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-sm"
@@ -726,20 +837,12 @@ export default function Portfolio() {
         </div>
       </div>
 
-      {isManagingAssets && (
-        <div className="p-4 sm:p-6 lg:p-8 rounded-3xl border border-slate-200 bg-white shadow-sm space-y-6 lg:space-y-8">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-slate-50 flex items-center justify-center">
-                <Database className="w-5 h-5 text-slate-400" />
-              </div>
-              <h3 className="font-bold text-lg text-slate-900">Quản lý Loại Vàng & Bất động sản</h3>
-            </div>
-            <button onClick={() => setIsManagingAssets(false)} className="text-slate-400 hover:text-slate-600 transition-colors">
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-          
+      <Modal 
+        isOpen={isManagingAssets} 
+        onClose={() => setIsManagingAssets(false)} 
+        title="Quản lý Loại Vàng & Bất động sản"
+      >
+        <div className="space-y-8">
           <form onSubmit={handleSaveAsset} className="grid grid-cols-1 md:grid-cols-4 gap-6 items-end p-6 rounded-2xl bg-slate-50/50 border border-slate-100">
             <div className="space-y-2">
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Danh mục</label>
@@ -857,225 +960,215 @@ export default function Portfolio() {
             </table>
           </div>
         </div>
-      )}
+      </Modal>
 
-      {isAdding && (
-        <div className="p-4 sm:p-6 lg:p-8 rounded-3xl border border-slate-200 bg-white shadow-sm space-y-6 lg:space-y-8">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-slate-50 flex items-center justify-center">
-                <Plus className="w-5 h-5 text-slate-400" />
+      <Modal
+        isOpen={isAdding}
+        onClose={() => setIsAdding(false)}
+        title={editingId ? 'Chỉnh sửa Giao dịch' : 'Thêm Giao dịch Mới'}
+      >
+        <form onSubmit={handleSubmit} className="space-y-8">
+          <div className="space-y-6">
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Loại tài sản</label>
+              <div className="grid grid-cols-5 gap-2">
+                {['crypto', 'gold', 'bank', 'real_estate', 'cash'].map((type) => (
+                  <button
+                    key={type}
+                    type="button"
+                    onClick={() => {
+                      const symbol = type === 'crypto' ? 'BTC' : (type === 'gold' ? (assetDefinitions.find(a => a.category === 'gold')?.symbol || '') : (type === 'bank' ? 'Vietcombank' : (type === 'cash' ? 'Tiền mặt' : (assetDefinitions.find(a => a.category === 'real_estate')?.symbol || ''))));
+                      setFormData({ 
+                        ...formData, 
+                        asset_type: type, 
+                        asset_symbol: symbol,
+                        transaction_type: type === 'bank' ? 'deposit' : (type === 'cash' ? 'deposit' : 'buy'),
+                        amount: type === 'real_estate' ? '1' : '',
+                        price_per_unit: '1',
+                        currency: type === 'crypto' ? 'USD' : 'VND'
+                      });
+                    }}
+                    className={cn(
+                      "px-4 py-2.5 rounded-xl text-xs font-bold transition-all border",
+                      formData.asset_type === type 
+                        ? "bg-slate-900 border-slate-900 text-white shadow-md" 
+                        : "bg-white border-slate-200 text-slate-600 hover:border-slate-300"
+                    )}
+                  >
+                    {type === 'crypto' ? 'Crypto' : type === 'gold' ? 'Vàng' : type === 'bank' ? 'Ngân hàng' : type === 'cash' ? 'Tiền mặt' : 'BĐS'}
+                  </button>
+                ))}
               </div>
-              <h3 className="font-bold text-lg text-slate-900">{editingId ? 'Cập nhật Giao dịch' : 'Thêm Giao dịch Mới'}</h3>
             </div>
-            <button onClick={() => setIsAdding(false)} className="text-slate-400 hover:text-slate-600 transition-colors">
-              <X className="w-5 h-5" />
-            </button>
+
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Mã / Tên tài sản</label>
+              {formData.asset_type === 'gold' || formData.asset_type === 'real_estate' ? (
+                <select
+                  value={formData.asset_symbol}
+                  onChange={(e) => setFormData({ ...formData, asset_symbol: e.target.value })}
+                  className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
+                >
+                  <option value="">-- Chọn --</option>
+                  {assetDefinitions
+                    .filter(a => a.category === formData.asset_type)
+                    .map(a => (
+                      <option key={a.id} value={a.symbol}>{a.name}</option>
+                    ))}
+                </select>
+              ) : formData.asset_type === 'crypto' ? (
+                <select
+                  value={formData.asset_symbol}
+                  onChange={(e) => setFormData({ ...formData, asset_symbol: e.target.value })}
+                  className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
+                >
+                  <option value="BTC">BTC</option>
+                  <option value="USDT">USDT</option>
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  required
+                  placeholder={formData.asset_type === 'bank' ? 'Tên ngân hàng...' : 'Tên tài sản...'}
+                  value={formData.asset_symbol}
+                  onChange={(e) => setFormData({ ...formData, asset_symbol: e.target.value })}
+                  className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
+                />
+              )}
+            </div>
           </div>
 
-          <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-3 gap-6 lg:gap-8">
-            <div className="space-y-6">
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Loại tài sản</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {['crypto', 'gold', 'bank', 'real_estate'].map((type) => (
-                    <button
-                      key={type}
-                      type="button"
-                      onClick={() => {
-                        const symbol = type === 'crypto' ? 'BTC' : (type === 'gold' ? (assetDefinitions.find(a => a.category === 'gold')?.symbol || '') : (type === 'bank' ? 'Vietcombank' : (assetDefinitions.find(a => a.category === 'real_estate')?.symbol || '')));
-                        setFormData({ 
-                          ...formData, 
-                          asset_type: type, 
-                          asset_symbol: symbol,
-                          transaction_type: type === 'bank' ? 'deposit' : 'buy',
-                          amount: type === 'real_estate' ? '1' : '',
-                          price_per_unit: '',
-                          currency: type === 'crypto' ? 'USD' : 'VND'
-                        });
-                      }}
-                      className={cn(
-                        "px-4 py-2.5 rounded-xl text-xs font-bold transition-all border",
-                        formData.asset_type === type 
-                          ? "bg-slate-900 border-slate-900 text-white shadow-md" 
-                          : "bg-white border-slate-200 text-slate-600 hover:border-slate-300"
-                      )}
-                    >
-                      {type === 'crypto' ? 'Crypto' : type === 'gold' ? 'Vàng' : type === 'bank' ? 'Ngân hàng' : 'BĐS'}
-                    </button>
-                  ))}
-                </div>
+          <div className="space-y-6">
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Loại giao dịch</label>
+              <div className="flex gap-2 p-1 bg-slate-100 rounded-xl">
+                {['buy', 'sell', 'deposit', 'withdraw', 'borrow', 'repay'].filter(type => {
+                  if (formData.asset_type === 'bank' || formData.asset_type === 'cash') return type === 'deposit' || type === 'withdraw';
+                  if (formData.asset_type === 'real_estate') return type === 'buy' || type === 'sell' || type === 'borrow' || type === 'repay';
+                  return type === 'buy' || type === 'sell';
+                }).map((type) => (
+                  <button
+                    key={type}
+                    type="button"
+                    onClick={() => setFormData({ ...formData, transaction_type: type })}
+                    className={cn(
+                      "flex-1 py-2 rounded-lg text-xs font-bold transition-all",
+                      formData.transaction_type === type 
+                        ? "bg-white text-slate-900 shadow-sm" 
+                        : "text-slate-500 hover:text-slate-700"
+                    )}
+                  >
+                    {type === 'buy' ? 'Mua' : type === 'sell' ? 'Bán' : type === 'deposit' ? 'Gửi' : type === 'withdraw' ? 'Rút' : type === 'borrow' ? 'Vay' : 'Trả nợ'}
+                  </button>
+                ))}
               </div>
+            </div>
 
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Mã / Tên tài sản</label>
-                {formData.asset_type === 'gold' || formData.asset_type === 'real_estate' ? (
-                  <select
-                    value={formData.asset_symbol}
-                    onChange={(e) => setFormData({ ...formData, asset_symbol: e.target.value })}
-                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
-                  >
-                    <option value="">-- Chọn --</option>
-                    {assetDefinitions
-                      .filter(a => a.category === formData.asset_type)
-                      .map(a => (
-                        <option key={a.id} value={a.symbol}>{a.name}</option>
-                      ))}
-                  </select>
-                ) : formData.asset_type === 'crypto' ? (
-                  <select
-                    value={formData.asset_symbol}
-                    onChange={(e) => setFormData({ ...formData, asset_symbol: e.target.value })}
-                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
-                  >
-                    <option value="BTC">BTC</option>
-                    <option value="USDT">USDT</option>
-                  </select>
-                ) : (
+            <div className="grid grid-cols-2 gap-4">
+              {(formData.asset_type !== 'real_estate' || formData.transaction_type === 'borrow' || formData.transaction_type === 'repay') && (
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                    {formData.asset_type === 'bank' || formData.asset_type === 'cash' ? 'Số tiền (VND)' : formData.transaction_type === 'borrow' ? 'Số tiền vay' : formData.transaction_type === 'repay' ? 'Số tiền trả' : `Số lượng ${formData.asset_type === 'gold' ? '(Lượng)' : ''}`}
+                  </label>
                   <input
                     type="text"
                     required
-                    placeholder={formData.asset_type === 'bank' ? 'Tên ngân hàng...' : 'Tên tài sản...'}
-                    value={formData.asset_symbol}
-                    onChange={(e) => setFormData({ ...formData, asset_symbol: e.target.value })}
+                    placeholder="0.00"
+                    value={formData.amount}
+                    onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
                     className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
                   />
-                )}
-              </div>
-            </div>
-
-            <div className="space-y-6">
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Loại giao dịch</label>
-                <div className="flex gap-2 p-1 bg-slate-100 rounded-xl">
-                  {['buy', 'sell', 'deposit', 'withdraw', 'borrow', 'repay'].filter(type => {
-                    if (formData.asset_type === 'bank') return type === 'deposit' || type === 'withdraw';
-                    if (formData.asset_type === 'real_estate') return type === 'buy' || type === 'sell' || type === 'borrow' || type === 'repay';
-                    return type === 'buy' || type === 'sell';
-                  }).map((type) => (
-                    <button
-                      key={type}
-                      type="button"
-                      onClick={() => setFormData({ ...formData, transaction_type: type })}
-                      className={cn(
-                        "flex-1 py-2 rounded-lg text-xs font-bold transition-all",
-                        formData.transaction_type === type 
-                          ? "bg-white text-slate-900 shadow-sm" 
-                          : "text-slate-500 hover:text-slate-700"
-                      )}
-                    >
-                      {type === 'buy' ? 'Mua' : type === 'sell' ? 'Bán' : type === 'deposit' ? 'Gửi' : type === 'withdraw' ? 'Rút' : type === 'borrow' ? 'Vay' : 'Trả nợ'}
-                    </button>
-                  ))}
                 </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                {(formData.asset_type !== 'real_estate' || formData.transaction_type === 'borrow' || formData.transaction_type === 'repay') && (
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                      {formData.asset_type === 'bank' ? 'Số tiền (VND)' : formData.transaction_type === 'borrow' ? 'Số tiền vay' : formData.transaction_type === 'repay' ? 'Số tiền trả' : `Số lượng ${formData.asset_type === 'gold' ? '(Lượng)' : ''}`}
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="0.00"
-                      value={formData.amount}
-                      onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
-                      className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
-                    />
-                  </div>
-                )}
-                {(formData.transaction_type !== 'borrow' && formData.transaction_type !== 'repay') && (
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                      {formData.asset_type === 'bank' ? 'Lãi suất (%)' : formData.asset_type === 'real_estate' ? `Giá trị (${formData.currency})` : `Giá (${formData.currency})`}
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="0.00"
-                      value={formData.asset_type === 'bank' ? formData.interest_rate : formData.price_per_unit}
-                      onChange={(e) => setFormData({ ...formData, [formData.asset_type === 'bank' ? 'interest_rate' : 'price_per_unit']: e.target.value })}
-                      className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
-                    />
-                  </div>
-                )}
-                {(formData.transaction_type === 'borrow') && (
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                      Lãi suất vay (%/năm)
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="0.00"
-                      value={formData.interest_rate}
-                      onChange={(e) => setFormData({ ...formData, interest_rate: e.target.value })}
-                      className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
-                    />
-                  </div>
-                )}
-                {(formData.asset_type === 'bank' || formData.transaction_type === 'borrow') && (
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                      {formData.asset_type === 'bank' ? 'Kỳ hạn (Tháng)' : 'Thời hạn vay (Năm)'}
-                    </label>
-                    <input
-                      type="number"
-                      placeholder={formData.asset_type === 'bank' ? "0 (Không kỳ hạn)" : "VD: 20"}
-                      value={formData.term}
-                      onChange={(e) => setFormData({ ...formData, term: e.target.value })}
-                      className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
-                    />
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="space-y-6">
-              <div className="grid grid-cols-2 gap-4">
+              )}
+              {(formData.transaction_type !== 'borrow' && formData.transaction_type !== 'repay' && formData.asset_type !== 'cash') && (
                 <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Ngày giao dịch</label>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                    {formData.asset_type === 'bank' ? 'Lãi suất (%)' : formData.asset_type === 'real_estate' ? `Giá trị (${formData.currency})` : `Giá (${formData.currency})`}
+                  </label>
                   <input
-                    type="date"
+                    type="text"
                     required
-                    value={formData.date}
-                    onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                    placeholder="0.00"
+                    value={formData.asset_type === 'bank' ? formData.interest_rate : formData.price_per_unit}
+                    onChange={(e) => setFormData({ ...formData, [formData.asset_type === 'bank' ? 'interest_rate' : 'price_per_unit']: e.target.value })}
                     className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
                   />
                 </div>
+              )}
+              {(formData.transaction_type === 'borrow') && (
                 <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Tiền tệ</label>
-                  <div className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-900">
-                    {formData.asset_type === 'crypto' ? 'USD' : 'VND'}
-                  </div>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                    Lãi suất vay (%/năm)
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="0.00"
+                    value={formData.interest_rate}
+                    onChange={(e) => setFormData({ ...formData, interest_rate: e.target.value })}
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
+                  />
+                </div>
+              )}
+              {(formData.asset_type === 'bank' || formData.transaction_type === 'borrow') && (
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                    {formData.asset_type === 'bank' ? 'Kỳ hạn (Tháng)' : 'Thời hạn vay (Năm)'}
+                  </label>
+                  <input
+                    type="number"
+                    placeholder={formData.asset_type === 'bank' ? "0 (Không kỳ hạn)" : "VD: 20"}
+                    value={formData.term}
+                    onChange={(e) => setFormData({ ...formData, term: e.target.value })}
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-6">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Ngày giao dịch</label>
+                <input
+                  type="date"
+                  required
+                  value={formData.date}
+                  onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                  className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Tiền tệ</label>
+                <div className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-900">
+                  {formData.asset_type === 'crypto' ? 'USD' : 'VND'}
                 </div>
               </div>
-
-              <div className="pt-6 flex gap-3">
-                <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="flex-1 bg-slate-900 hover:bg-slate-800 text-white px-6 py-3 rounded-xl text-sm font-bold transition-all shadow-md disabled:opacity-50"
-                >
-                  {isSubmitting ? 'Đang xử lý...' : (editingId ? 'Cập nhật' : 'Lưu Giao dịch')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsAdding(false);
-                    setEditingId(null);
-                  }}
-                  className="px-6 py-3 border border-slate-200 text-slate-500 hover:bg-slate-50 rounded-xl text-sm font-bold transition-all"
-                >
-                  Hủy
-                </button>
-              </div>
             </div>
-          </form>
-        </div>
-      )}
+
+            <div className="pt-6 flex gap-3">
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="flex-1 bg-slate-900 hover:bg-slate-800 text-white px-6 py-3 rounded-xl text-sm font-bold transition-all shadow-md disabled:opacity-50"
+              >
+                {isSubmitting ? 'Đang xử lý...' : (editingId ? 'Cập nhật' : 'Lưu Giao dịch')}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsAdding(false);
+                  setEditingId(null);
+                }}
+                className="px-6 py-3 border border-slate-200 text-slate-500 hover:bg-slate-50 rounded-xl text-sm font-bold transition-all"
+              >
+                Hủy
+              </button>
+            </div>
+          </div>
+        </form>
+      </Modal>
 
       {/* Current Holdings Section */}
       <div className="rounded-3xl border border-slate-200 bg-white overflow-hidden shadow-sm">
@@ -1120,43 +1213,46 @@ export default function Portfolio() {
                           )}>
                             {holding.asset_type === 'crypto' ? '₿' : holding.asset_type === 'gold' ? 'Au' : holding.asset_type === 'bank' ? '🏦' : '🏠'}
                           </div>
-                          <div>
-                            <div className="font-bold text-slate-900">{holding.asset_symbol}</div>
-                            <div className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">
-                              {holding.asset_type === 'crypto' ? 'Crypto' : holding.asset_type === 'gold' ? 'Vàng' : holding.asset_type === 'bank' ? 'Tiết kiệm' : 'BĐS'}
-                            </div>
-                          </div>
+                        <div className="font-bold text-slate-900">{holding.asset_symbol}</div>
+                        <div className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">
+                          {holding.asset_type === 'crypto' ? 'Crypto' : holding.asset_type === 'gold' ? 'Vàng' : holding.asset_type === 'bank' ? 'Tiết kiệm' : holding.asset_type === 'cash' ? 'Tiền mặt' : 'BĐS'}
                         </div>
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        <div className="font-mono font-bold text-slate-700">
-                          {holding.asset_type === 'bank' 
-                            ? formatCurrency(currency === 'VND' ? holding.totalAmount * exchangeRate : holding.totalAmount, currency)
-                            : holding.totalAmount.toLocaleString(undefined, { maximumFractionDigits: 6 })}
-                        </div>
-                        {holding.asset_type === 'bank' && holding.depositTx?.term > 0 && (
-                          <div className="text-[10px] text-slate-400 font-bold">Kỳ hạn: {holding.depositTx.term} tháng</div>
-                        )}
+                      </div>
+                    </td>
+                  <td className="px-6 py-4 text-right">
+                    <div className="font-mono font-bold text-slate-700">
+                      {holding.asset_type === 'bank' || holding.asset_type === 'cash'
+                        ? formatCurrency(currency === 'VND' ? holding.totalAmount * exchangeRate : holding.totalAmount, currency)
+                        : holding.totalAmount.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+                    </div>
+                    {holding.asset_type === 'bank' && holding.depositTx?.term > 0 && (
+                      <div className={cn(
+                        "text-[10px] font-bold",
+                        holding.isMatured ? "text-rose-500" : "text-slate-400"
+                      )}>
+                        Kỳ hạn: {holding.depositTx.term} tháng {holding.isMatured && '(Đã đến hạn)'}
+                      </div>
+                    )}
                         {holding.asset_type === 'real_estate' && holding.loanCurrentValue > 0 && (
                           <div className="text-[10px] text-rose-500 font-bold">Dư nợ: {formatCurrency(currency === 'VND' ? holding.loanCurrentValue * exchangeRate : holding.loanCurrentValue, currency)}</div>
                         )}
                       </td>
-                      <td className="px-6 py-4 text-right">
-                        <div className="font-mono font-bold text-slate-700">
-                          {holding.asset_type === 'bank'
-                            ? `${holding.depositTx?.interest_rate || 0}% / năm`
-                            : formatCurrency(currency === 'VND' ? (holding.totalInvested / holding.totalAmount) * exchangeRate : (holding.totalInvested / holding.totalAmount), currency)}
-                        </div>
-                      </td>
+                  <td className="px-6 py-4 text-right">
+                    <div className="font-mono font-bold text-slate-700">
+                      {holding.asset_type === 'bank'
+                        ? `${holding.depositTx?.interest_rate || 0}% / năm`
+                        : holding.asset_type === 'cash' ? '-' : formatCurrency(currency === 'VND' ? (holding.totalInvested / holding.totalAmount) * exchangeRate : (holding.totalInvested / holding.totalAmount), currency)}
+                    </div>
+                  </td>
                       <td className="px-6 py-4 text-right font-mono font-bold text-slate-900">
                         {formatCurrency(currency === 'VND' ? holding.currentValue * exchangeRate : holding.currentValue, currency)}
                       </td>
-                      <td className="px-6 py-4 text-right">
-                        {holding.asset_type === 'bank' ? (
-                          <div className="font-mono font-bold text-emerald-600">
-                            +{formatCurrency(currency === 'VND' ? pl * exchangeRate : pl, currency)}
-                          </div>
-                        ) : (
+                  <td className="px-6 py-4 text-right">
+                    {holding.asset_type === 'bank' || holding.asset_type === 'cash' ? (
+                      <div className="font-mono font-bold text-emerald-600">
+                        {holding.asset_type === 'bank' ? `+${formatCurrency(currency === 'VND' ? pl * exchangeRate : pl, currency)}` : '-'}
+                      </div>
+                    ) : (
                           <div className="flex flex-col items-end">
                             <span className={cn(
                               "font-mono font-bold",
@@ -1173,15 +1269,59 @@ export default function Portfolio() {
                           </div>
                         )}
                       </td>
-                      <td className="px-6 py-4 text-right">
-                        {holding.asset_type === 'bank' ? (
-                          <button
-                            onClick={() => handleSettleBankDeposit(holding.depositTx)}
-                            className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-600 rounded-lg text-xs font-bold transition-colors"
-                          >
-                            Tất toán
-                          </button>
-                        ) : (
+                  <td className="px-6 py-4 text-right">
+                    {holding.asset_type === 'bank' ? (
+                      <button
+                        onClick={() => handleSettleBankDeposit(holding.depositTx)}
+                        className={cn(
+                          "px-3 py-1.5 rounded-lg text-xs font-bold transition-colors shadow-sm",
+                          holding.isMatured 
+                            ? "bg-rose-500 hover:bg-rose-600 text-white" 
+                            : "bg-emerald-50 hover:bg-emerald-100 text-emerald-600"
+                        )}
+                      >
+                        Tất toán {holding.isMatured && 'ngay'}
+                      </button>
+                    ) : holding.asset_type === 'cash' ? (
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => {
+                            setIsAdding(true);
+                            setEditingId(null);
+                            setFormData({
+                              ...formData,
+                              asset_type: 'cash',
+                              asset_symbol: 'Tiền mặt',
+                              transaction_type: 'deposit',
+                              amount: '',
+                              price_per_unit: '1',
+                              currency: 'VND'
+                            });
+                          }}
+                          className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-600 rounded-lg text-xs font-bold transition-colors"
+                        >
+                          Nạp tiền
+                        </button>
+                        <button
+                          onClick={() => {
+                            setIsAdding(true);
+                            setEditingId(null);
+                            setFormData({
+                              ...formData,
+                              asset_type: 'cash',
+                              asset_symbol: 'Tiền mặt',
+                              transaction_type: 'withdraw',
+                              amount: '',
+                              price_per_unit: '1',
+                              currency: 'VND'
+                            });
+                          }}
+                          className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg text-xs font-bold transition-colors"
+                        >
+                          Rút tiền
+                        </button>
+                      </div>
+                    ) : (
                           <div className="flex items-center justify-end gap-2">
                             <button
                               onClick={() => {
@@ -1252,13 +1392,15 @@ export default function Portfolio() {
                               </button>
                             )}
                           </div>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
+                        )
+                      }
+                    </td>
+                  </tr>
+                );
+              })
+            )
+          }
+        </tbody>
           </table>
         </div>
       </div>
@@ -1300,7 +1442,10 @@ export default function Portfolio() {
                   </td>
                 </tr>
               ) : (
-                transactions.map((t) => {
+                transactions
+                  .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                  .slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
+                  .map((t) => {
                   const currentValueInUsd = calculateCurrentValue(t);
                   const txCurrency = (t.currency || 'USD') as 'USD' | 'VND';
                   const displayCurrentValue = txCurrency === 'VND' ? currentValueInUsd * exchangeRate : currentValueInUsd;
@@ -1391,10 +1536,34 @@ export default function Portfolio() {
                     </tr>
                   );
                 })
-              )}
+              )
+            }
             </tbody>
           </table>
         </div>
+        {transactions.length > itemsPerPage && (
+          <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-between bg-slate-50/30">
+            <div className="text-xs font-bold text-slate-400 uppercase tracking-widest">
+              Trang {currentPage} / {Math.ceil(transactions.length / itemsPerPage)}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                disabled={currentPage === 1}
+                className="p-2 rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => setCurrentPage(prev => Math.min(Math.ceil(transactions.length / itemsPerPage), prev + 1))}
+                disabled={currentPage === Math.ceil(transactions.length / itemsPerPage)}
+                className="p-2 rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {confirmModal && confirmModal.isOpen && (
@@ -1476,6 +1645,40 @@ export default function Portfolio() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+interface ModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  title: string;
+  children: React.ReactNode;
+}
+
+function Modal({ isOpen, onClose, title, children }: ModalProps) {
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div 
+        className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+        onClick={onClose}
+      />
+      <div className="relative bg-white w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden border border-slate-200 animate-in fade-in zoom-in duration-200">
+        <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-white">
+          <h3 className="font-bold text-xl text-slate-900">{title}</h3>
+          <button 
+            onClick={onClose}
+            className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="p-6 max-h-[80vh] overflow-y-auto">
+          {children}
+        </div>
+      </div>
     </div>
   );
 }

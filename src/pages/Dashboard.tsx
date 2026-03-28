@@ -16,7 +16,11 @@ interface Transaction {
   amount: string;
   price_per_unit: string;
   interest_rate?: string;
+  term?: number;
   date: string;
+  currency: string;
+  status?: string;
+  linked_id?: number;
 }
 
 interface MarketPrice {
@@ -168,8 +172,8 @@ export default function Dashboard() {
     const valueInUsd = txCurrency === 'VND' ? (amount * price) / exchangeRate : (amount * price);
     const amountInAssetUnits = amount; // Amount is already in asset units (BTC, Lượng, etc.)
     
-    // For bank, amount is the currency amount. If it's VND, we normalize it to USD.
-    const normalizedAmount = (tx.asset_type === 'bank' && txCurrency === 'VND') 
+    // For bank/cash, amount is the currency amount. If it's VND, we normalize it to USD.
+    const normalizedAmount = ((tx.asset_type === 'bank' || tx.asset_type === 'cash') && txCurrency === 'VND') 
       ? amount / exchangeRate 
       : amount;
 
@@ -212,6 +216,7 @@ export default function Dashboard() {
   let goldValue = 0;
   let bankValue = 0;
   let realEstateValue = 0;
+  let cashValue = 0;
 
   // Separate totals for USD and VND
   let usdTotalInvested = 0;
@@ -226,29 +231,47 @@ export default function Dashboard() {
       const now = new Date();
       h.transactions.forEach(tx => {
         if (tx.transaction_type === 'deposit') {
-          const txCurrency = (tx as any).currency || 'USD';
+          const txCurrency = tx.currency || 'USD';
           const txAmount = parseFloat(tx.amount);
           const txAmountUsd = txCurrency === 'VND' ? txAmount / exchangeRate : txAmount;
           
           // Check if this deposit is settled
-          const isSettled = h.transactions.some(w => w.transaction_type === 'withdraw' && w.linked_id === tx.id);
+          const isSettled = tx.status === 'settled' || h.transactions.some(w => w.transaction_type === 'withdraw' && w.linked_id === tx.id);
           
           if (!isSettled) {
-            bankValueUsd += txAmountUsd;
+            const txDate = new Date(tx.date);
+            const daysPassed = Math.max(0, (now.getTime() - txDate.getTime()) / (1000 * 3600 * 24));
+            
             if (tx.interest_rate) {
-              const txDate = new Date(tx.date);
-              const daysPassed = (now.getTime() - txDate.getTime()) / (1000 * 3600 * 24);
-              const interestUsd = txAmountUsd * (parseFloat(tx.interest_rate) / 100) * (daysPassed / 365);
-              bankValueUsd += interestUsd;
+              const rate = parseFloat(tx.interest_rate) / 100;
+              const termInMonths = tx.term || 0;
+              
+              if (termInMonths > 0) {
+                const termInDays = termInMonths * 30;
+                const effectiveDays = Math.min(daysPassed, termInDays);
+                const interestUsd = txAmountUsd * rate * (effectiveDays / 365);
+                bankValueUsd += txAmountUsd + interestUsd;
+              } else {
+                // Compound interest (daily) for non-term
+                bankValueUsd += txAmountUsd * Math.pow(1 + rate / 365, daysPassed);
+              }
+            } else {
+              bankValueUsd += txAmountUsd;
             }
           }
         }
       });
-      h.currentPrice = 1; // 1 USD = 1 USD
+      h.currentPrice = 1;
       h.currentValue = bankValueUsd;
       h.avgPrice = 1;
       h.pnl = bankValueUsd - h.invested;
       h.pnlPercent = h.invested > 0 ? ((bankValueUsd - h.invested) / h.invested) * 100 : 0;
+    } else if (h.type === 'cash') {
+      h.currentPrice = 1;
+      h.currentValue = h.amount;
+      h.avgPrice = 1;
+      h.pnl = 0;
+      h.pnlPercent = 0;
     } else {
       // For non-bank assets, try to get price from marketPrices or assetDefinitions
       // For Gold and Real Estate, always prioritize assetDefinitions
@@ -324,6 +347,7 @@ export default function Dashboard() {
       if (h.type === 'gold') goldValue += h.currentValue;
       if (h.type === 'bank') bankValue += h.currentValue;
       if (h.type === 'real_estate') realEstateValue += h.currentValue;
+      if (h.type === 'cash') cashValue += h.currentValue;
       vndTotalInvested += h.invested;
       vndTotalCurrentValue += h.currentValue;
     }

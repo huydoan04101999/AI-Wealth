@@ -525,7 +525,7 @@ export default function Portfolio() {
             id: `bank-${tx.id}`,
             asset_type: 'bank',
             asset_symbol: tx.asset_symbol,
-            totalAmount: amount,
+            totalAmount: valueInUsd, // Store in USD for consistent display
             totalInvested: valueInUsd,
             currentValue: calculateCurrentValue(tx),
             transactions: [tx],
@@ -559,11 +559,11 @@ export default function Portfolio() {
         const valueInUsd = txCurrency === 'VND' ? (amount * price) / exchangeRate : (amount * price);
         
         if (tx.transaction_type === 'deposit') {
-          holding.totalAmount += amount;
+          holding.totalAmount += valueInUsd;
           holding.totalInvested += valueInUsd;
           holding.currentValue += valueInUsd;
         } else if (tx.transaction_type === 'withdraw') {
-          holding.totalAmount -= amount;
+          holding.totalAmount -= valueInUsd;
           holding.totalInvested -= valueInUsd;
           holding.currentValue -= valueInUsd;
         }
@@ -615,7 +615,11 @@ export default function Portfolio() {
         if (holding) {
           holding.transactions.push(tx);
           const amount = parseFloat(tx.amount);
-          holding.totalAmount -= amount;
+          const price = parseFloat(tx.price_per_unit);
+          const txCurrency = tx.currency || 'USD';
+          const valueInUsd = txCurrency === 'VND' ? (amount * price) / exchangeRate : (amount * price);
+          
+          holding.totalAmount -= valueInUsd;
           // Note: currentValue is already calculated by calculateCurrentValue(tx) in first pass if it's a deposit
           // But we might need to recalculate it if it's partially withdrawn
           holding.currentValue = calculateCurrentValue(holding.depositTx);
@@ -1233,15 +1237,19 @@ export default function Portfolio() {
                         Kỳ hạn: {holding.depositTx.term} tháng {holding.isMatured && '(Đã đến hạn)'}
                       </div>
                     )}
-                        {holding.asset_type === 'real_estate' && holding.loanCurrentValue > 0 && (
-                          <div className="text-[10px] text-rose-500 font-bold">Dư nợ: {formatCurrency(currency === 'VND' ? holding.loanCurrentValue * exchangeRate : holding.loanCurrentValue, currency)}</div>
-                        )}
-                      </td>
+                    {holding.asset_type === 'real_estate' && holding.loanCurrentValue > 0 && (
+                      <div className="text-[10px] text-rose-500 font-bold">Dư nợ: {formatCurrency(currency === 'VND' ? holding.loanCurrentValue * exchangeRate : holding.loanCurrentValue, currency)}</div>
+                    )}
+                  </td>
                   <td className="px-6 py-4 text-right">
                     <div className="font-mono font-bold text-slate-700">
                       {holding.asset_type === 'bank'
                         ? `${holding.depositTx?.interest_rate || 0}% / năm`
-                        : holding.asset_type === 'cash' ? '-' : formatCurrency(currency === 'VND' ? (holding.totalInvested / holding.totalAmount) * exchangeRate : (holding.totalInvested / holding.totalAmount), currency)}
+                        : holding.asset_type === 'cash' 
+                          ? '-' 
+                          : holding.asset_type === 'real_estate'
+                            ? formatCurrency(currency === 'VND' ? holding.totalInvested * exchangeRate : holding.totalInvested, currency)
+                            : formatCurrency(currency === 'VND' ? (holding.totalInvested / holding.totalAmount) * exchangeRate : (holding.totalInvested / holding.totalAmount), currency)}
                     </div>
                   </td>
                       <td className="px-6 py-4 text-right font-mono font-bold text-slate-900">

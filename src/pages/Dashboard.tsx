@@ -35,9 +35,11 @@ interface AssetHolding {
   avgPrice: number;
   currentPrice: number;
   currentValue: number;
+  loanCurrentValue?: number;
   pnl: number;
   pnlPercent: number;
   type: string;
+  transactions: Transaction[];
 }
 
 // Map common symbols to CoinGecko IDs
@@ -182,6 +184,7 @@ export default function Dashboard() {
         symbol: tx.asset_symbol,
         amount: 0,
         invested: 0,
+        purchasePrice: 0,
         avgPrice: 0,
         currentPrice: 0,
         currentValue: 0,
@@ -189,7 +192,7 @@ export default function Dashboard() {
         pnlPercent: 0,
         type: tx.asset_type,
         transactions: []
-      };
+      } as any;
     }
 
     const h = holdingsMap[tx.asset_symbol];
@@ -198,6 +201,9 @@ export default function Dashboard() {
     if (tx.transaction_type === 'buy' || tx.transaction_type === 'deposit') {
       h.amount += normalizedAmount;
       h.invested += valueInUsd;
+      if (tx.transaction_type === 'buy') {
+        (h as any).purchasePrice += valueInUsd;
+      }
     } else if (tx.transaction_type === 'sell' || tx.transaction_type === 'withdraw') {
       h.amount -= normalizedAmount;
       h.invested -= valueInUsd;
@@ -324,6 +330,13 @@ export default function Dashboard() {
       loanCurrentValue = Math.max(0, loanCurrentValue);
 
       h.currentValue = (h.amount * h.currentPrice) - loanCurrentValue;
+      h.loanCurrentValue = loanCurrentValue;
+      
+      if (h.type === 'real_estate') {
+        // User requested: Giá vốn = Giá BDS lúc mua - dư nợ
+        h.invested = ((h as any).purchasePrice || 0) - loanCurrentValue;
+      }
+      
       h.avgPrice = h.amount > 0 ? h.invested / h.amount : 0;
       h.pnl = h.currentValue - h.invested;
       h.pnlPercent = h.invested > 0 ? (h.pnl / h.invested) * 100 : 0;
@@ -335,6 +348,11 @@ export default function Dashboard() {
       h.currentPrice = h.currentValue; // Principal + Interest
     }
     
+    return {
+      ...h,
+      loanCurrentValue: h.loanCurrentValue
+    };
+  }).map(h => {
     // All values here are in USD. We will convert for display later.
     totalInvested += h.invested;
     totalCurrentValue += h.currentValue;
@@ -914,10 +932,10 @@ Lưu ý: Format bằng Markdown, sử dụng emoji phù hợp để báo cáo si
             <thead className="text-[10px] text-slate-400 bg-slate-50/50 border-b border-slate-100 uppercase tracking-widest font-bold">
               <tr>
                 <th className="px-6 py-4">Tài sản</th>
-                <th className="px-6 py-4 text-right">Số lượng</th>
-                <th className="px-6 py-4 text-right">Giá vốn (Avg)</th>
-                <th className="px-6 py-4 text-right">Giá hiện tại</th>
-                <th className="px-6 py-4 text-right">Lời/Lỗ</th>
+                <th className="px-6 py-4 text-right">Số lượng / Gốc</th>
+                <th className="px-6 py-4 text-right">Giá vốn / Lãi suất</th>
+                <th className="px-6 py-4 text-right">Giá trị hiện tại</th>
+                <th className="px-6 py-4 text-right">Lãi / Lỗ</th>
                 <th className="px-6 py-4 text-right">Tỷ trọng</th>
               </tr>
             </thead>
@@ -982,14 +1000,50 @@ Lưu ý: Format bằng Markdown, sử dụng emoji phù hợp để báo cáo si
                         </div>
                       </td>
                       <td className="px-6 py-4 text-right font-mono font-bold text-slate-700">
-                        {isRealEstate || isBank ? '-' : h.amount.toLocaleString(undefined, { minimumFractionDigits: 5, maximumFractionDigits: 5 })} <span className="text-[10px] text-slate-400 font-medium">{isGold ? 'Lượng' : ''}</span>
+                        {isRealEstate ? (
+                          <div className="flex flex-col items-end">
+                            <span>{h.amount}</span>
+                            {h.loanCurrentValue && h.loanCurrentValue > 0 && (
+                              <span className="text-[10px] text-rose-500 font-bold">
+                                Dư nợ: {formatCurrency(h.loanCurrentValue * exchangeRate, 'VND')}
+                              </span>
+                            )}
+                          </div>
+                        ) : isBank ? (
+                          formatCurrency(h.invested * exchangeRate, 'VND')
+                        ) : (
+                          <div className="flex flex-col items-end">
+                            <span>{h.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 5 })}</span>
+                            <span className="text-[10px] text-slate-400 font-medium">{isGold ? 'Lượng' : ''}</span>
+                          </div>
+                        )}
                       </td>
                       <td className="px-6 py-4 text-right font-mono text-slate-500 font-medium">
-                        {formatCurrency(h.type === 'crypto' ? h.avgPrice : h.avgPrice * exchangeRate, h.type === 'crypto' ? 'USD' : 'VND')}
+                        {isBank ? (
+                          <div className="flex flex-col items-end">
+                            {h.transactions.filter(t => t.transaction_type === 'deposit').map((t, idx) => (
+                              <div key={idx} className="text-[10px]">
+                                {t.term ? `Kỳ hạn: ${t.term} tháng` : 'Không kỳ hạn'}
+                                {t.interest_rate ? `, ${t.interest_rate}% / năm` : ''}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          formatCurrency(h.type === 'crypto' ? h.avgPrice : h.avgPrice * exchangeRate, h.type === 'crypto' ? 'USD' : 'VND')
+                        )}
                       </td>
                       <td className="px-6 py-4 text-right font-mono">
                         <div className="font-bold text-slate-900 flex items-center justify-end gap-2">
-                          {h.currentPrice > 0 ? formatCurrency(h.type === 'crypto' ? h.currentPrice : h.currentPrice * exchangeRate, h.type === 'crypto' ? 'USD' : 'VND') : 'N/A'}
+                          {isRealEstate ? (
+                            <div className="flex flex-col items-end">
+                              <span>{formatCurrency(h.currentValue * exchangeRate, 'VND')}</span>
+                              <span className="text-[10px] text-slate-400 font-medium">
+                                Giá TT: {formatCurrency(h.currentPrice * exchangeRate, 'VND')}
+                              </span>
+                            </div>
+                          ) : h.currentPrice > 0 ? (
+                            formatCurrency(h.type === 'crypto' ? h.currentPrice : h.currentPrice * exchangeRate, h.type === 'crypto' ? 'USD' : 'VND')
+                          ) : 'N/A'}
                         </div>
                         {h.type === 'crypto' && h.currentPrice > 0 && (
                           <div className={cn("text-[10px] flex items-center justify-end font-bold", marketPrices[h.symbol]?.usd_24h_change >= 0 ? "text-emerald-600" : "text-rose-600")}>

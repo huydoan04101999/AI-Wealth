@@ -1237,14 +1237,6 @@ export default function Portfolio() {
                           ? `Số lượng: ${holding.totalAmount}`
                           : holding.totalAmount.toLocaleString(undefined, { maximumFractionDigits: 6 })}
                     </div>
-                    {holding.asset_type === 'bank' && holding.depositTx?.term > 0 && (
-                      <div className={cn(
-                        "text-[10px] font-bold",
-                        holding.isMatured ? "text-rose-500" : "text-slate-400"
-                      )}>
-                        Kỳ hạn: {holding.depositTx.term} tháng {holding.isMatured && '(Đã đến hạn)'}
-                      </div>
-                    )}
                     {holding.asset_type === 'real_estate' && holding.loanCurrentValue > 0 && (
                       <div className="text-[10px] text-rose-500 font-bold">Dư nợ: {formatCurrency(currency === 'VND' ? holding.loanCurrentValue * exchangeRate : holding.loanCurrentValue, currency)}</div>
                     )}
@@ -1259,6 +1251,14 @@ export default function Portfolio() {
                             ? formatCurrency(currency === 'VND' ? holding.totalInvested * exchangeRate : holding.totalInvested, currency)
                             : formatCurrency(currency === 'VND' ? (holding.totalInvested / holding.totalAmount) * exchangeRate : (holding.totalInvested / holding.totalAmount), currency)}
                     </div>
+                    {holding.asset_type === 'bank' && holding.depositTx?.term > 0 && (
+                      <div className={cn(
+                        "text-[10px] font-bold",
+                        holding.isMatured ? "text-rose-500" : "text-slate-400"
+                      )}>
+                        Kỳ hạn: {holding.depositTx.term} tháng {holding.isMatured && '(Đã đến hạn)'}
+                      </div>
+                    )}
                   </td>
                       <td className="px-6 py-4 text-right font-mono font-bold text-slate-900">
                         {formatCurrency(currency === 'VND' ? holding.currentValue * exchangeRate : holding.currentValue, currency)}

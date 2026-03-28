@@ -1,22 +1,43 @@
-export const formatCurrency = (amount: number | string, currency: 'USD' | 'VND') => {
+export const formatCurrency = (amount: number | string, currency: 'USD' | 'VND', decimals?: number) => {
   const num = typeof amount === 'string' ? parseFloat(amount) : amount;
   
   return new Intl.NumberFormat(currency === 'VND' ? 'vi-VN' : 'en-US', {
     style: 'currency',
     currency: currency,
-    maximumFractionDigits: 0,
+    maximumFractionDigits: decimals !== undefined ? decimals : (currency === 'VND' ? 0 : 2),
   }).format(num);
 };
 
 export const formatCompactCurrency = (amount: number | string, currency: 'USD' | 'VND') => {
   const num = typeof amount === 'string' ? parseFloat(amount) : amount;
   
-  return new Intl.NumberFormat(currency === 'VND' ? 'vi-VN' : 'en-US', {
+  if (currency === 'VND') {
+    if (num >= 1000000000) {
+      const billions = Math.floor(num / 1000000000);
+      const millions = Math.round((num % 1000000000) / 1000000);
+      if (millions > 0) {
+        return `${billions} tỷ ${millions} triệu ₫`;
+      }
+      return `${billions} tỷ ₫`;
+    }
+    if (num >= 1000000) {
+      const millions = Math.round(num / 1000000);
+      return `${millions} triệu ₫`;
+    }
+    return formatCurrency(num, 'VND');
+  }
+
+  // For USD, if less than 10,000, don't use compact
+  if (currency === 'USD' && num < 10000) {
+    return formatCurrency(num, 'USD');
+  }
+  
+  return new Intl.NumberFormat('en-US', {
     style: 'currency',
-    currency: currency,
+    currency: 'USD',
     notation: 'compact',
     compactDisplay: 'short',
-    maximumFractionDigits: 1,
+    maximumFractionDigits: 2,
   }).format(num);
 };
 

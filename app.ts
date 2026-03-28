@@ -247,6 +247,8 @@ app.get("/api/portfolio/transactions", requireAuth, async (req: any, res) => {
     try { await sql`ALTER TABLE transactions ADD COLUMN user_id VARCHAR(255);`; } catch (e) {}
     try { await sql`ALTER TABLE transactions ALTER COLUMN user_id TYPE VARCHAR(255);`; } catch (e) {}
     try { await sql`ALTER TABLE transactions ADD COLUMN term INTEGER DEFAULT 0;`; } catch (e) {}
+    try { await sql`ALTER TABLE transactions ADD COLUMN status VARCHAR(50) DEFAULT 'active';`; } catch (e) {}
+    try { await sql`ALTER TABLE transactions ADD COLUMN linked_id INTEGER;`; } catch (e) {}
     try { await sql`ALTER TABLE cash_flows ADD COLUMN user_id VARCHAR(255);`; } catch (e) {}
     try { await sql`ALTER TABLE cash_flows ALTER COLUMN user_id TYPE VARCHAR(255);`; } catch (e) {}
     try { await sql`ALTER TABLE asset_definitions ADD CONSTRAINT unique_symbol_user UNIQUE (symbol, user_id);`; } catch (e) {}
@@ -276,15 +278,17 @@ app.post("/api/portfolio/transactions", requireAuth, async (req: any, res) => {
     return res.status(500).json({ error: "POSTGRES_URL is not configured." });
   }
   try {
-    const { asset_type, asset_symbol, transaction_type, amount, price_per_unit, interest_rate, term, currency, date } = req.body;
+    const { asset_type, asset_symbol, transaction_type, amount, price_per_unit, interest_rate, term, currency, date, status, linked_id } = req.body;
     const safeAmount = amount === "" ? 0 : amount;
     const safePrice = price_per_unit === "" ? 0 : price_per_unit;
     const safeInterest = interest_rate === "" ? 0 : interest_rate;
     const safeTerm = term === "" ? 0 : term;
+    const safeStatus = status || 'active';
+    const safeLinkedId = linked_id || null;
     
     await sql`
-      INSERT INTO transactions (user_id, asset_type, asset_symbol, transaction_type, amount, price_per_unit, interest_rate, term, currency, date)
-      VALUES (${req.userId}, ${asset_type}, ${asset_symbol}, ${transaction_type}, ${safeAmount}, ${safePrice}, ${safeInterest || 0}, ${safeTerm || 0}, ${currency || 'USD'}, ${date || new Date()})
+      INSERT INTO transactions (user_id, asset_type, asset_symbol, transaction_type, amount, price_per_unit, interest_rate, term, currency, date, status, linked_id)
+      VALUES (${req.userId}, ${asset_type}, ${asset_symbol}, ${transaction_type}, ${safeAmount}, ${safePrice}, ${safeInterest || 0}, ${safeTerm || 0}, ${currency || 'USD'}, ${date || new Date()}, ${safeStatus}, ${safeLinkedId})
     `;
     res.json({ success: true });
   } catch (error) {
@@ -297,11 +301,13 @@ app.put("/api/portfolio/transactions/:id", requireAuth, async (req: any, res) =>
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid ID" });
-    const { asset_type, asset_symbol, transaction_type, amount, price_per_unit, interest_rate, term, currency, date } = req.body;
+    const { asset_type, asset_symbol, transaction_type, amount, price_per_unit, interest_rate, term, currency, date, status, linked_id } = req.body;
     const safeAmount = amount === "" ? 0 : amount;
     const safePrice = price_per_unit === "" ? 0 : price_per_unit;
     const safeInterest = interest_rate === "" ? 0 : interest_rate;
     const safeTerm = term === "" ? 0 : term;
+    const safeStatus = status || 'active';
+    const safeLinkedId = linked_id || null;
 
     await sql`
       UPDATE transactions 
@@ -313,7 +319,9 @@ app.put("/api/portfolio/transactions/:id", requireAuth, async (req: any, res) =>
           interest_rate = ${safeInterest || 0}, 
           term = ${safeTerm || 0},
           currency = ${currency}, 
-          date = ${date}
+          date = ${date},
+          status = ${safeStatus},
+          linked_id = ${safeLinkedId}
       WHERE id = ${id} AND user_id = ${req.userId}
     `;
     res.json({ success: true });

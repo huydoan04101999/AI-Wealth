@@ -194,9 +194,15 @@ export default function Dashboard() {
     if (tx.transaction_type === 'buy' || tx.transaction_type === 'deposit') {
       h.amount += normalizedAmount;
       h.invested += valueInUsd;
-    } else {
+    } else if (tx.transaction_type === 'sell' || tx.transaction_type === 'withdraw') {
       h.amount -= normalizedAmount;
       h.invested -= valueInUsd;
+    } else if (tx.transaction_type === 'borrow') {
+      h.invested -= valueInUsd; // Loan reduces out-of-pocket investment
+      // We don't change amount for borrow
+    } else if (tx.transaction_type === 'repay') {
+      h.invested += valueInUsd; // Repayment increases out-of-pocket investment
+      // We don't change amount for repay
     }
   });
 
@@ -213,28 +219,36 @@ export default function Dashboard() {
   let vndTotalInvested = 0;
   let vndTotalCurrentValue = 0;
 
-  const activeHoldings = Object.values(holdingsMap).filter(h => h.amount > 0).map(h => {
+  const activeHoldings = Object.values(holdingsMap).filter(h => h.amount > 0 || h.transactions.some(t => t.transaction_type === 'borrow')).map(h => {
     if (h.type === 'bank') {
       // Calculate interest for bank deposits
-      let totalInterestUsd = 0;
+      let bankValueUsd = 0;
       const now = new Date();
       h.transactions.forEach(tx => {
-        if (tx.transaction_type === 'deposit' && tx.interest_rate) {
+        if (tx.transaction_type === 'deposit') {
           const txCurrency = (tx as any).currency || 'USD';
           const txAmount = parseFloat(tx.amount);
           const txAmountUsd = txCurrency === 'VND' ? txAmount / exchangeRate : txAmount;
           
-          const txDate = new Date(tx.date);
-          const daysPassed = (now.getTime() - txDate.getTime()) / (1000 * 3600 * 24);
-          const interestUsd = txAmountUsd * (parseFloat(tx.interest_rate) / 100) * (daysPassed / 365);
-          totalInterestUsd += interestUsd;
+          // Check if this deposit is settled
+          const isSettled = h.transactions.some(w => w.transaction_type === 'withdraw' && w.linked_id === tx.id);
+          
+          if (!isSettled) {
+            bankValueUsd += txAmountUsd;
+            if (tx.interest_rate) {
+              const txDate = new Date(tx.date);
+              const daysPassed = (now.getTime() - txDate.getTime()) / (1000 * 3600 * 24);
+              const interestUsd = txAmountUsd * (parseFloat(tx.interest_rate) / 100) * (daysPassed / 365);
+              bankValueUsd += interestUsd;
+            }
+          }
         }
       });
       h.currentPrice = 1; // 1 USD = 1 USD
-      h.currentValue = h.amount + totalInterestUsd;
+      h.currentValue = bankValueUsd;
       h.avgPrice = 1;
-      h.pnl = totalInterestUsd;
-      h.pnlPercent = h.invested > 0 ? (totalInterestUsd / h.invested) * 100 : 0;
+      h.pnl = bankValueUsd - h.invested;
+      h.pnlPercent = h.invested > 0 ? ((bankValueUsd - h.invested) / h.invested) * 100 : 0;
     } else {
       // For non-bank assets, try to get price from marketPrices or assetDefinitions
       // For Gold and Real Estate, always prioritize assetDefinitions
@@ -259,8 +273,35 @@ export default function Dashboard() {
         }
       }
 
-      h.currentValue = h.amount * h.currentPrice;
-      h.avgPrice = h.invested / h.amount;
+      let loanCurrentValue = 0;
+      h.transactions.forEach(tx => {
+        if (tx.transaction_type === 'borrow') {
+          const rate = parseFloat(tx.interest_rate || '0') / 100;
+          const startDate = new Date(tx.date);
+          const now = new Date();
+          const diffTime = Math.max(0, now.getTime() - startDate.getTime());
+          const diffYears = diffTime / (1000 * 60 * 60 * 24 * 365);
+          const txAmount = parseFloat(tx.amount);
+          const txCurrency = (tx as any).currency || 'USD';
+          const baseValueInUsd = txCurrency === 'VND' ? txAmount / exchangeRate : txAmount;
+          loanCurrentValue += baseValueInUsd * (1 + rate * diffYears);
+        } else if (tx.transaction_type === 'repay') {
+          const linkedBorrow = h.transactions.find(t => t.transaction_type === 'borrow');
+          const rate = linkedBorrow ? parseFloat(linkedBorrow.interest_rate || '0') / 100 : 0;
+          const startDate = new Date(tx.date);
+          const now = new Date();
+          const diffTime = Math.max(0, now.getTime() - startDate.getTime());
+          const diffYears = diffTime / (1000 * 60 * 60 * 24 * 365);
+          const txAmount = parseFloat(tx.amount);
+          const txCurrency = (tx as any).currency || 'USD';
+          const baseValueInUsd = txCurrency === 'VND' ? txAmount / exchangeRate : txAmount;
+          loanCurrentValue -= baseValueInUsd * (1 + rate * diffYears);
+        }
+      });
+      loanCurrentValue = Math.max(0, loanCurrentValue);
+
+      h.currentValue = (h.amount * h.currentPrice) - loanCurrentValue;
+      h.avgPrice = h.amount > 0 ? h.invested / h.amount : 0;
       h.pnl = h.currentValue - h.invested;
       h.pnlPercent = h.invested > 0 ? (h.pnl / h.invested) * 100 : 0;
     }
@@ -288,7 +329,7 @@ export default function Dashboard() {
     }
     
     return h;
-  });
+  }).filter(h => h.amount > 0 || Math.abs(h.currentValue) > 0.01);
 
   // Convert VND totals to VND for display
   const displayVndTotalInvested = vndTotalInvested * exchangeRate;
@@ -324,38 +365,117 @@ export default function Dashboard() {
       const label = currentDate.toLocaleString('vi-VN', { month: 'short' });
       
       let totalValueAtPoint = 0;
-      const holdingsAtPoint: Record<string, { amount: number, lastPrice: number, type: string }> = {};
+      const holdingsAtPoint: Record<string, { amount: number, lastPrice: number, type: string, loanValue: number, transactions: any[] }> = {};
       
       sortedTx.forEach(tx => {
         const txDate = new Date(tx.date);
         if (txDate <= monthEnd) {
           if (!holdingsAtPoint[tx.asset_symbol]) {
-            holdingsAtPoint[tx.asset_symbol] = { amount: 0, lastPrice: 0, type: tx.asset_type };
+            holdingsAtPoint[tx.asset_symbol] = { amount: 0, lastPrice: 0, type: tx.asset_type, loanValue: 0, transactions: [] };
           }
           const amount = parseFloat(tx.amount);
           const price = parseFloat(tx.price_per_unit);
           const txCurrency = (tx as any).currency || 'USD';
           const priceInUsd = txCurrency === 'VND' ? price / exchangeRate : price;
           
+          holdingsAtPoint[tx.asset_symbol].transactions.push(tx);
+          
           if (tx.transaction_type === 'buy' || tx.transaction_type === 'deposit') {
             holdingsAtPoint[tx.asset_symbol].amount += amount;
-          } else {
+            holdingsAtPoint[tx.asset_symbol].lastPrice = priceInUsd;
+          } else if (tx.transaction_type === 'sell' || tx.transaction_type === 'withdraw') {
             holdingsAtPoint[tx.asset_symbol].amount -= amount;
           }
-          holdingsAtPoint[tx.asset_symbol].lastPrice = priceInUsd;
         }
       });
       
       const isCurrentMonth = currentDate.getMonth() === lastDate.getMonth() && currentDate.getFullYear() === lastDate.getFullYear();
       
       Object.entries(holdingsAtPoint).forEach(([symbol, h]) => {
-        if (h.amount > 0) {
+        // Calculate loan value at this point in time
+        let loanValue = 0;
+        h.transactions.forEach(tx => {
+          if (tx.transaction_type === 'borrow') {
+            const rate = parseFloat(tx.interest_rate || '0') / 100;
+            const startDate = new Date(tx.date);
+            const diffTime = Math.max(0, monthEnd.getTime() - startDate.getTime());
+            const diffYears = diffTime / (1000 * 60 * 60 * 24 * 365);
+            const txAmount = parseFloat(tx.amount);
+            const txCurrency = (tx as any).currency || 'USD';
+            const baseValueInUsd = txCurrency === 'VND' ? txAmount / exchangeRate : txAmount;
+            loanValue += baseValueInUsd * (1 + rate * diffYears);
+          } else if (tx.transaction_type === 'repay') {
+            const linkedBorrow = h.transactions.find(t => t.transaction_type === 'borrow');
+            const rate = linkedBorrow ? parseFloat(linkedBorrow.interest_rate || '0') / 100 : 0;
+            const startDate = new Date(tx.date);
+            const diffTime = Math.max(0, monthEnd.getTime() - startDate.getTime());
+            const diffYears = diffTime / (1000 * 60 * 60 * 24 * 365);
+            const txAmount = parseFloat(tx.amount);
+            const txCurrency = (tx as any).currency || 'USD';
+            const baseValueInUsd = txCurrency === 'VND' ? txAmount / exchangeRate : txAmount;
+            loanValue -= baseValueInUsd * (1 + rate * diffYears);
+          }
+        });
+        loanValue = Math.max(0, loanValue);
+
+        if (h.amount > 0 || loanValue > 0) {
           let price = h.lastPrice;
+          
+          // Try to get historical price from assetDefinitions
+          const assetDef = assetDefinitions.find(a => a.symbol === symbol);
+          if (assetDef && assetDef.price_history) {
+            try {
+              const history = JSON.parse(assetDef.price_history);
+              // Find the most recent price update before or on monthEnd
+              const validHistory = history.filter((entry: any) => new Date(entry.date) <= monthEnd);
+              if (validHistory.length > 0) {
+                // Sort descending by date
+                validHistory.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+                const histPrice = parseFloat(validHistory[0].price);
+                // Assume custom asset prices are in VND, convert to USD
+                price = histPrice / exchangeRate;
+              }
+            } catch (e) {
+              // Ignore parsing errors
+            }
+          }
+          
           // For current month, use market prices if available
           if (isCurrentMonth && marketPrices[symbol]) {
             price = marketPrices[symbol].usd;
+          } else if (isCurrentMonth && assetDef) {
+            price = parseFloat(assetDef.current_price) / exchangeRate;
           }
-          totalValueAtPoint += h.amount * price;
+          
+          if (h.type === 'bank') {
+            // Calculate total value of bank deposits in USD
+            let bankValueUsd = 0;
+            h.transactions.forEach(tx => {
+              if (tx.transaction_type === 'deposit') {
+                const txCurrency = (tx as any).currency || 'USD';
+                const txAmount = parseFloat(tx.amount);
+                const txAmountUsd = txCurrency === 'VND' ? txAmount / exchangeRate : txAmount;
+                
+                // Check if this deposit is settled before or on monthEnd
+                const isSettled = h.transactions.some(w => w.transaction_type === 'withdraw' && w.linked_id === tx.id && new Date(w.date) <= monthEnd);
+                
+                if (!isSettled) {
+                  bankValueUsd += txAmountUsd;
+                  if (tx.interest_rate) {
+                    const txDate = new Date(tx.date);
+                    const daysPassed = (monthEnd.getTime() - txDate.getTime()) / (1000 * 3600 * 24);
+                    if (daysPassed > 0) {
+                      const interestUsd = txAmountUsd * (parseFloat(tx.interest_rate) / 100) * (daysPassed / 365);
+                      bankValueUsd += interestUsd;
+                    }
+                  }
+                }
+              }
+            });
+            totalValueAtPoint += bankValueUsd;
+          } else {
+            totalValueAtPoint += (h.amount * price) - loanValue;
+          }
         }
       });
       

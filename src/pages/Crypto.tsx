@@ -197,7 +197,9 @@ Hãy trả lời bằng tiếng Việt, phong cách chuyên nghiệp, quyết đ
       // Parse AI Insights
       const getMatch = (regex: RegExp) => {
         const match = cioRes.match(regex);
-        return match ? match[1].trim() : null;
+        if (!match) return null;
+        // Clean up markdown bold markers and extra whitespace
+        return match[1].replace(/\*\*/g, '').trim();
       };
 
       const fgIndex = parseInt(getMatch(/CHỈ SỐ TÂM LÝ:\s*(\d+)/) || '50');
@@ -701,13 +703,15 @@ Hãy trả lời ngắn gọn, chuyên nghiệp và bám sát bối cảnh phân
             </div>
 
             <div className="bg-gradient-to-br from-indigo-600 to-purple-700 rounded-2xl p-6 text-white shadow-lg shadow-indigo-200">
-              <h3 className="font-bold mb-2 flex items-center gap-2 text-sm">
-                <Info className="w-4 h-4" />
-                Dự báo Chiến lược
+              <h3 className="font-bold mb-3 flex items-center gap-2 text-sm">
+                <BrainCircuit className="w-4 h-4 text-indigo-300" />
+                Dự báo Chiến lược AI
               </h3>
-              <p className="text-xs text-indigo-100 leading-relaxed">
-                {aiInsights?.strategyForecast || 'Bitcoin đang trong giai đoạn "Price Discovery" sau Halving. AI dự báo BTC sẽ dẫn dắt thị trường trong 3-6 tháng tới. Ưu tiên nắm giữ và chỉ chốt lời khi đạt các mốc Fibonacci quan trọng trên $100k.'}
-              </p>
+              <div className="text-xs text-indigo-50 leading-relaxed opacity-90 prose prose-invert prose-sm max-w-none">
+                <ReactMarkdown>
+                  {aiInsights?.strategyForecast || 'Bitcoin đang trong giai đoạn "Price Discovery" sau Halving. AI dự báo BTC sẽ dẫn dắt thị trường trong 3-6 tháng tới. Ưu tiên nắm giữ và chỉ chốt lời khi đạt các mốc Fibonacci quan trọng trên $100k.'}
+                </ReactMarkdown>
+              </div>
             </div>
           </div>
         </div>
@@ -899,15 +903,23 @@ Hãy trả lời ngắn gọn, chuyên nghiệp và bám sát bối cảnh phân
                       "Nhấn 'Chạy Phân tích AI' để nhận quyết định cuối cùng từ Giám đốc Đầu tư."
                     ) : (
                       <div className="space-y-4">
-                        <div className="prose prose-invert prose-slate prose-sm max-w-none line-clamp-4 opacity-80">
-                          <ReactMarkdown>{agentResponses.cio.content}</ReactMarkdown>
+                        <div className="prose prose-invert prose-slate prose-sm max-w-none line-clamp-4 opacity-90 leading-relaxed">
+                          <ReactMarkdown 
+                            components={{
+                              p: ({children}) => <p className="mb-2 last:mb-0">{children}</p>,
+                              ul: ({children}) => <ul className="list-disc pl-4 mb-2">{children}</ul>,
+                              li: ({children}) => <li className="mb-1">{children}</li>
+                            }}
+                          >
+                            {agentResponses.cio.content}
+                          </ReactMarkdown>
                         </div>
                         <button 
                           onClick={() => setSelectedAgentAnalysis({ name: 'Supreme Commander (CIO)', content: agentResponses.cio.content })}
-                          className="text-indigo-400 text-xs font-bold hover:text-indigo-300 transition-colors flex items-center gap-1.5"
+                          className="text-indigo-400 text-xs font-black uppercase tracking-widest hover:text-indigo-300 transition-colors flex items-center gap-2 group/btn"
                         >
-                          <Maximize2 className="w-3.5 h-3.5" />
-                          ĐỌC TOÀN BỘ BÁO CÁO CIO
+                          <Maximize2 className="w-4 h-4 group-hover/btn:scale-110 transition-transform" />
+                          PHÂN TÍCH CHI TIẾT
                         </button>
                       </div>
                     )}
@@ -1039,31 +1051,46 @@ Hãy trả lời ngắn gọn, chuyên nghiệp và bám sát bối cảnh phân
                       {aiInsights ? (
                         aiInsights.dcaZones.map((zone, idx) => (
                           <div key={idx} className={cn(
-                            "p-4 rounded-xl border flex justify-between items-center",
-                            idx === 0 ? "bg-emerald-50 border-emerald-100" : "bg-blue-50 border-blue-100"
+                            "p-5 rounded-2xl border-2 transition-all hover:shadow-md",
+                            idx === 0 
+                              ? "bg-emerald-50 border-emerald-100 hover:border-emerald-200" 
+                              : "bg-blue-50 border-blue-100 hover:border-blue-200"
                           )}>
-                            <span className="text-sm font-medium text-slate-700">{zone.label}</span>
-                            <span className={cn(
-                              "font-bold",
-                              idx === 0 ? "text-emerald-700" : "text-blue-700"
-                            )}>{zone.range}</span>
+                            <div className="flex justify-between items-start mb-2">
+                              <span className={cn(
+                                "text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md",
+                                idx === 0 ? "bg-emerald-200 text-emerald-800" : "bg-blue-200 text-blue-800"
+                              )}>
+                                {zone.label}
+                              </span>
+                              <div className={cn(
+                                "w-2 h-2 rounded-full animate-pulse",
+                                idx === 0 ? "bg-emerald-500" : "bg-blue-500"
+                              )}></div>
+                            </div>
+                            <div className={cn(
+                              "text-lg font-black tracking-tight",
+                              idx === 0 ? "text-emerald-900" : "text-blue-900"
+                            )}>
+                              {zone.range}
+                            </div>
                           </div>
                         ))
                       ) : (
                         <>
-                          <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-100 flex justify-between items-center">
-                            <span className="text-sm font-medium text-slate-700">Vùng 1 (An toàn)</span>
-                            <span className="font-bold text-emerald-700">{formatCurrency((btcData?.price || 0) * 0.9)} - {formatCurrency((btcData?.price || 0) * 0.95)}</span>
+                          <div className="p-5 rounded-2xl bg-emerald-50 border-2 border-emerald-100">
+                            <span className="text-[10px] font-black text-emerald-800 uppercase tracking-widest block mb-2">Vùng 1 (An toàn)</span>
+                            <span className="text-lg font-black text-emerald-900 tracking-tight">{formatCurrency((btcData?.price || 0) * 0.9)} - {formatCurrency((btcData?.price || 0) * 0.95)}</span>
                           </div>
-                          <div className="p-4 rounded-xl bg-blue-50 border border-blue-100 flex justify-between items-center">
-                            <span className="text-sm font-medium text-slate-700">Vùng 2 (Trung bình)</span>
-                            <span className="font-bold text-blue-700">{formatCurrency((btcData?.price || 0) * 0.96)} - {formatCurrency((btcData?.price || 0) * 0.98)}</span>
+                          <div className="p-5 rounded-2xl bg-blue-50 border-2 border-blue-100">
+                            <span className="text-[10px] font-black text-blue-800 uppercase tracking-widest block mb-2">Vùng 2 (Trung bình)</span>
+                            <span className="text-lg font-black text-blue-900 tracking-tight">{formatCurrency((btcData?.price || 0) * 0.96)} - {formatCurrency((btcData?.price || 0) * 0.98)}</span>
                           </div>
                         </>
                       )}
-                      <div className="p-4 rounded-xl bg-slate-50 border border-slate-100 flex justify-between items-center opacity-60">
-                        <span className="text-sm font-medium text-slate-700">Vùng 3 (Giá hiện tại)</span>
-                        <span className="font-bold text-slate-700">{formatCurrency(btcData?.price || 0)}</span>
+                      <div className="p-5 rounded-2xl bg-slate-50 border-2 border-slate-100 opacity-60">
+                        <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Vùng 3 (Giá hiện tại)</span>
+                        <span className="text-lg font-black text-slate-700 tracking-tight">{formatCurrency(btcData?.price || 0)}</span>
                       </div>
                     </div>
                   </div>
@@ -1100,19 +1127,29 @@ Hãy trả lời ngắn gọn, chuyên nghiệp và bám sát bối cảnh phân
             </h3>
             
             <div className="space-y-6">
-              <div className="p-4 rounded-xl bg-slate-800/50 border border-slate-700">
-                <div className="text-xs text-slate-400 uppercase font-bold mb-2">Mức cắt lỗ (Stop Loss)</div>
-                <div className="text-xl font-bold text-red-400">{aiInsights?.stopLoss || formatCurrency((btcData?.price || 0) * 0.85)}</div>
-                <p className="text-[10px] text-slate-500 mt-1">Dựa trên phân tích rủi ro AI.</p>
+              <div className="p-5 rounded-2xl bg-slate-800/50 border border-slate-700 group hover:border-red-500/50 transition-all">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="text-[10px] text-slate-400 uppercase font-black tracking-widest">Mức cắt lỗ (Stop Loss)</div>
+                  <ShieldAlert className="w-4 h-4 text-red-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+                </div>
+                <div className="text-2xl font-black text-red-400 tracking-tight">
+                  {aiInsights?.stopLoss || formatCurrency((btcData?.price || 0) * 0.85)}
+                </div>
+                <p className="text-[10px] text-slate-500 mt-2 font-medium italic">Dựa trên phân tích rủi ro AI.</p>
               </div>
 
-              <div className="p-4 rounded-xl bg-slate-800/50 border border-slate-700">
-                <div className="text-xs text-slate-400 uppercase font-bold mb-2">Mục tiêu (Take Profit)</div>
-                <div className="text-xl font-bold text-emerald-400">{aiInsights?.takeProfit || "$100,000 - $120,000"}</div>
-                <p className="text-[10px] text-slate-500 mt-1">Dự báo mục tiêu chu kỳ AI.</p>
+              <div className="p-5 rounded-2xl bg-slate-800/50 border border-slate-700 group hover:border-emerald-500/50 transition-all">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="text-[10px] text-slate-400 uppercase font-black tracking-widest">Mục tiêu (Take Profit)</div>
+                  <Target className="w-4 h-4 text-emerald-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+                </div>
+                <div className="text-2xl font-black text-emerald-400 tracking-tight">
+                  {aiInsights?.takeProfit || "$100,000 - $120,000"}
+                </div>
+                <p className="text-[10px] text-slate-500 mt-2 font-medium italic">Dự báo mục tiêu chu kỳ AI.</p>
               </div>
 
-              <div className="pt-4">
+              <div className="pt-4 px-2">
                 <div className="flex items-center gap-2 text-amber-400 mb-2">
                   <AlertCircle className="w-4 h-4" />
                   <span className="text-xs font-bold uppercase">Lưu ý</span>

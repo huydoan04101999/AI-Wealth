@@ -110,12 +110,31 @@ app.post("/api/portfolio/assets", requireAuth, async (req: any, res) => {
   if (!process.env.POSTGRES_URL) return res.status(500).json({ error: "No DB" });
   try {
     const { category, name, current_price } = req.body;
-    const symbol = name.toUpperCase().replace(/\s+/g, '_');
+    const symbol = name.toUpperCase().trim();
+    
+    // Get existing price history if any
+    const { rows: existing } = await sql`SELECT price_history FROM asset_definitions WHERE symbol = ${symbol} AND user_id = ${req.userId}`;
+    let priceHistory = [];
+    if (existing.length > 0 && existing[0].price_history) {
+      try {
+        priceHistory = JSON.parse(existing[0].price_history);
+      } catch (e) {
+        priceHistory = [];
+      }
+    }
+    
+    // Add new entry to history
+    priceHistory.push({
+      price: current_price,
+      date: new Date().toISOString()
+    });
+
     await sql`
-      INSERT INTO asset_definitions (category, name, symbol, current_price, user_id)
-      VALUES (${category}, ${name}, ${symbol}, ${current_price}, ${req.userId})
+      INSERT INTO asset_definitions (category, name, symbol, current_price, price_history, user_id)
+      VALUES (${category}, ${name}, ${symbol}, ${current_price}, ${JSON.stringify(priceHistory)}, ${req.userId})
       ON CONFLICT (symbol, user_id) DO UPDATE SET 
         current_price = EXCLUDED.current_price,
+        price_history = EXCLUDED.price_history,
         name = EXCLUDED.name,
         updated_at = CURRENT_TIMESTAMP
     `;
@@ -143,8 +162,25 @@ app.put("/api/portfolio/assets/:id", requireAuth, async (req: any, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid ID" });
     const { category, name, current_price } = req.body;
-    const symbol = name.toUpperCase().replace(/\s+/g, '_');
+    const symbol = name.toUpperCase().trim();
     
+    // Get existing price history if any
+    const { rows: existingAsset } = await sql`SELECT price_history FROM asset_definitions WHERE id = ${id} AND user_id = ${req.userId}`;
+    let priceHistory = [];
+    if (existingAsset.length > 0 && existingAsset[0].price_history) {
+      try {
+        priceHistory = JSON.parse(existingAsset[0].price_history);
+      } catch (e) {
+        priceHistory = [];
+      }
+    }
+    
+    // Add new entry to history if price changed
+    priceHistory.push({
+      price: current_price,
+      date: new Date().toISOString()
+    });
+
     // Check if symbol already exists for another asset of the same user
     const { rows: existing } = await sql`SELECT * FROM asset_definitions WHERE symbol = ${symbol} AND id != ${id} AND user_id = ${req.userId}`;
     if (existing.length > 0) {
@@ -157,6 +193,7 @@ app.put("/api/portfolio/assets/:id", requireAuth, async (req: any, res) => {
           name = ${name}, 
           symbol = ${symbol}, 
           current_price = ${current_price},
+          price_history = ${JSON.stringify(priceHistory)},
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ${id} AND user_id = ${req.userId}
     `;
@@ -181,6 +218,7 @@ app.get("/api/portfolio/transactions", requireAuth, async (req: any, res) => {
         name VARCHAR(255),
         symbol VARCHAR(255),
         current_price NUMERIC DEFAULT 0,
+        price_history TEXT,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(symbol, user_id)
       );
@@ -196,7 +234,7 @@ app.get("/api/portfolio/transactions", requireAuth, async (req: any, res) => {
         amount NUMERIC,
         price_per_unit NUMERIC,
         interest_rate NUMERIC DEFAULT 0,
-        maturity_period INTEGER DEFAULT 0,
+        term INTEGER DEFAULT 0,
         currency VARCHAR(10) DEFAULT 'USD',
         date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
@@ -205,9 +243,10 @@ app.get("/api/portfolio/transactions", requireAuth, async (req: any, res) => {
     // Add user_id columns if they don't exist, or alter them to VARCHAR(255)
     try { await sql`ALTER TABLE asset_definitions ADD COLUMN user_id VARCHAR(255);`; } catch (e) {}
     try { await sql`ALTER TABLE asset_definitions ALTER COLUMN user_id TYPE VARCHAR(255);`; } catch (e) {}
+    try { await sql`ALTER TABLE asset_definitions ADD COLUMN price_history TEXT;`; } catch (e) {}
     try { await sql`ALTER TABLE transactions ADD COLUMN user_id VARCHAR(255);`; } catch (e) {}
     try { await sql`ALTER TABLE transactions ALTER COLUMN user_id TYPE VARCHAR(255);`; } catch (e) {}
-    try { await sql`ALTER TABLE transactions ADD COLUMN maturity_period INTEGER DEFAULT 0;`; } catch (e) {}
+    try { await sql`ALTER TABLE transactions ADD COLUMN term INTEGER DEFAULT 0;`; } catch (e) {}
     try { await sql`ALTER TABLE cash_flows ADD COLUMN user_id VARCHAR(255);`; } catch (e) {}
     try { await sql`ALTER TABLE cash_flows ALTER COLUMN user_id TYPE VARCHAR(255);`; } catch (e) {}
     try { await sql`ALTER TABLE asset_definitions ADD CONSTRAINT unique_symbol_user UNIQUE (symbol, user_id);`; } catch (e) {}
@@ -237,15 +276,15 @@ app.post("/api/portfolio/transactions", requireAuth, async (req: any, res) => {
     return res.status(500).json({ error: "POSTGRES_URL is not configured." });
   }
   try {
-    const { asset_type, asset_symbol, transaction_type, amount, price_per_unit, interest_rate, maturity_period, currency, date } = req.body;
+    const { asset_type, asset_symbol, transaction_type, amount, price_per_unit, interest_rate, term, currency, date } = req.body;
     const safeAmount = amount === "" ? 0 : amount;
     const safePrice = price_per_unit === "" ? 0 : price_per_unit;
     const safeInterest = interest_rate === "" ? 0 : interest_rate;
-    const safeMaturity = maturity_period === "" ? 0 : maturity_period;
+    const safeTerm = term === "" ? 0 : term;
     
     await sql`
-      INSERT INTO transactions (user_id, asset_type, asset_symbol, transaction_type, amount, price_per_unit, interest_rate, maturity_period, currency, date)
-      VALUES (${req.userId}, ${asset_type}, ${asset_symbol}, ${transaction_type}, ${safeAmount}, ${safePrice}, ${safeInterest || 0}, ${safeMaturity || 0}, ${currency || 'USD'}, ${date || new Date()})
+      INSERT INTO transactions (user_id, asset_type, asset_symbol, transaction_type, amount, price_per_unit, interest_rate, term, currency, date)
+      VALUES (${req.userId}, ${asset_type}, ${asset_symbol}, ${transaction_type}, ${safeAmount}, ${safePrice}, ${safeInterest || 0}, ${safeTerm || 0}, ${currency || 'USD'}, ${date || new Date()})
     `;
     res.json({ success: true });
   } catch (error) {
@@ -258,11 +297,11 @@ app.put("/api/portfolio/transactions/:id", requireAuth, async (req: any, res) =>
   try {
     const id = parseInt(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid ID" });
-    const { asset_type, asset_symbol, transaction_type, amount, price_per_unit, interest_rate, maturity_period, currency, date } = req.body;
+    const { asset_type, asset_symbol, transaction_type, amount, price_per_unit, interest_rate, term, currency, date } = req.body;
     const safeAmount = amount === "" ? 0 : amount;
     const safePrice = price_per_unit === "" ? 0 : price_per_unit;
     const safeInterest = interest_rate === "" ? 0 : interest_rate;
-    const safeMaturity = maturity_period === "" ? 0 : maturity_period;
+    const safeTerm = term === "" ? 0 : term;
 
     await sql`
       UPDATE transactions 
@@ -272,7 +311,7 @@ app.put("/api/portfolio/transactions/:id", requireAuth, async (req: any, res) =>
           amount = ${safeAmount}, 
           price_per_unit = ${safePrice}, 
           interest_rate = ${safeInterest || 0}, 
-          maturity_period = ${safeMaturity || 0},
+          term = ${safeTerm || 0},
           currency = ${currency}, 
           date = ${date}
       WHERE id = ${id} AND user_id = ${req.userId}

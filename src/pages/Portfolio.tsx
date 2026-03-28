@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { Plus, Database, AlertCircle, TrendingUp, ArrowDownRight, ArrowUpRight, Edit2, Trash2, Calendar, X, History, ShieldCheck, ShieldAlert } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Plus, Database, AlertCircle, TrendingUp, ArrowDownRight, ArrowUpRight, Edit2, Trash2, Calendar, X, History, ShieldCheck, ShieldAlert, Clock } from 'lucide-react';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { cn } from '../lib/utils';
 import { useStore } from '../store/useStore';
-import { formatCurrency, parseInputNumber } from '../lib/format';
+import { formatCurrency, formatCompactCurrency, parseInputNumber } from '../lib/format';
 import { useAuth } from '../contexts/AuthContext';
 
 interface Transaction {
@@ -13,6 +14,7 @@ interface Transaction {
   amount: string;
   price_per_unit: string;
   interest_rate?: string;
+  maturity_period?: number;
   date: string;
   currency: string;
 }
@@ -52,6 +54,7 @@ export default function Portfolio() {
     amount: '',
     price_per_unit: '',
     interest_rate: '',
+    maturity_period: '',
     date: new Date().toISOString().split('T')[0],
     currency: 'USD' // Default to USD for BTC
   });
@@ -188,6 +191,7 @@ export default function Portfolio() {
       const parsedAmount = parseInputNumber(formData.amount) || '0';
       const parsedPrice = formData.asset_type === 'bank' ? '1' : (parseInputNumber(formData.price_per_unit) || '0');
       const parsedInterest = formData.interest_rate ? parseInputNumber(formData.interest_rate) : '0';
+      const parsedMaturity = formData.maturity_period ? parseInt(formData.maturity_period) : 0;
 
       const res = await fetchApi(url, {
         method,
@@ -197,6 +201,7 @@ export default function Portfolio() {
           amount: parsedAmount,
           price_per_unit: parsedPrice,
           interest_rate: parsedInterest,
+          maturity_period: parsedMaturity,
           currency: formData.currency 
         })
       });
@@ -211,6 +216,7 @@ export default function Portfolio() {
         amount: '', 
         price_per_unit: '', 
         interest_rate: '',
+        maturity_period: '',
         date: new Date().toISOString().split('T')[0],
         currency: formData.asset_type === 'crypto' ? 'USD' : 'VND'
       });
@@ -242,13 +248,14 @@ export default function Portfolio() {
       amount: tx.amount,
       price_per_unit: tx.price_per_unit,
       interest_rate: tx.interest_rate || '',
+      maturity_period: tx.maturity_period?.toString() || '',
       date: new Date(tx.date).toISOString().split('T')[0],
       currency: (tx.currency || 'USD') as 'USD' | 'VND'
     });
     setIsAdding(true);
   };
 
-  const calculateCurrentValue = (tx: Transaction) => {
+  const calculateCurrentValue = (tx: Transaction, atDate?: Date) => {
     const amount = parseFloat(tx.amount);
     const originalPrice = parseFloat(tx.price_per_unit);
     const txCurrency = tx.currency || 'USD';
@@ -259,10 +266,22 @@ export default function Portfolio() {
     if (tx.asset_type === 'bank' && tx.interest_rate && tx.transaction_type === 'deposit') {
       const rate = parseFloat(tx.interest_rate) / 100;
       const startDate = new Date(tx.date);
-      const now = new Date();
+      const now = atDate || new Date();
       const diffTime = Math.max(0, now.getTime() - startDate.getTime());
       const diffDays = diffTime / (1000 * 60 * 60 * 24);
       
+      // Check for maturity
+      if (tx.maturity_period && tx.maturity_period > 0) {
+        const maturityDate = new Date(startDate);
+        maturityDate.setMonth(maturityDate.getMonth() + tx.maturity_period);
+        
+        if (now < maturityDate) {
+          // If not matured, use a very low non-term rate (e.g., 0.1%)
+          const nonTermRate = 0.001;
+          return baseValueInUsd * Math.pow(1 + nonTermRate / 365, diffDays);
+        }
+      }
+
       // Compound interest (daily) in USD
       return baseValueInUsd * Math.pow(1 + rate / 365, diffDays);
     }
@@ -280,6 +299,51 @@ export default function Portfolio() {
     }
     return marketPrices[symbol]?.usd || 0;
   };
+
+  // --- Calculate All-Time Growth Data ---
+  const growthData = useMemo(() => {
+    if (transactions.length === 0) return [];
+
+    const sortedTxs = [...transactions].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    const startDate = new Date(sortedTxs[0].date);
+    const endDate = new Date();
+    const data = [];
+
+    // Step through each day (or week if history is long, but let's do day for now)
+    const current = new Date(startDate);
+    while (current <= endDate) {
+      const dateStr = current.toISOString().split('T')[0];
+      
+      // Calculate portfolio value at this date
+      const valueAtDate = sortedTxs.reduce((sum, tx) => {
+        const txDate = new Date(tx.date);
+        if (txDate > current) return sum;
+
+        const value = calculateCurrentValue(tx, current);
+        if (tx.transaction_type === 'sell' || tx.transaction_type === 'withdraw') {
+          return sum - value;
+        } else {
+          return sum + value;
+        }
+      }, 0);
+
+      data.push({
+        date: dateStr,
+        value: currency === 'VND' ? valueAtDate * exchangeRate : valueAtDate
+      });
+
+      // Advance by 1 day (or more if we want to optimize)
+      current.setDate(current.getDate() + 1);
+      
+      // If history is very long, we might want to skip days
+      if (data.length > 365) {
+        current.setDate(current.getDate() + 6); // Weekly if > 1 year
+      }
+    }
+
+    return data;
+  }, [transactions, currency, exchangeRate, assetDefinitions, marketPrices]);
+  // ---------------------------------------
 
   // --- Calculate Inflation-Hedge Score ---
   // Group assets by type to calculate total value
@@ -425,6 +489,7 @@ export default function Portfolio() {
                 amount: '',
                 price_per_unit: '',
                 interest_rate: '',
+                maturity_period: '',
                 date: new Date().toISOString().split('T')[0],
                 currency: 'USD'
               });
@@ -437,6 +502,71 @@ export default function Portfolio() {
         </div>
       </div>
       
+      {/* All-Time Growth Chart */}
+      <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-6">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center">
+              <TrendingUp className="w-5 h-5 text-emerald-600" />
+            </div>
+            <div>
+              <h3 className="font-bold text-lg text-slate-900">Tăng trưởng tài sản</h3>
+              <p className="text-xs text-slate-500 font-medium">Biến động tổng giá trị danh mục (All-time)</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="h-[300px] w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={growthData}>
+              <defs>
+                <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#10b981" stopOpacity={0.1}/>
+                  <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+              <XAxis 
+                dataKey="date" 
+                axisLine={false}
+                tickLine={false}
+                tick={{ fontSize: 10, fill: '#94a3b8' }}
+                minTickGap={30}
+                tickFormatter={(str) => {
+                  const d = new Date(str);
+                  return `${d.getMonth() + 1}/${d.getFullYear()}`;
+                }}
+              />
+              <YAxis 
+                axisLine={false}
+                tickLine={false}
+                tick={{ fontSize: 10, fill: '#94a3b8' }}
+                tickFormatter={(val) => formatCompactCurrency(val, currency)}
+              />
+              <Tooltip 
+                contentStyle={{ 
+                  borderRadius: '16px', 
+                  border: 'none', 
+                  boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)',
+                  fontSize: '12px',
+                  fontWeight: 'bold'
+                }}
+                formatter={(val: number) => [formatCurrency(val, currency), 'Giá trị']}
+                labelFormatter={(label) => new Date(label).toLocaleDateString('vi-VN')}
+              />
+              <Area 
+                type="monotone" 
+                dataKey="value" 
+                stroke="#10b981" 
+                strokeWidth={3}
+                fillOpacity={1} 
+                fill="url(#colorValue)" 
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
       {/* Portfolio Summary Section */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-2">
@@ -792,6 +922,23 @@ export default function Portfolio() {
                   />
                 </div>
               </div>
+
+              {formData.asset_type === 'bank' && (
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Kỳ hạn gửi (tháng)</label>
+                  <div className="relative">
+                    <Clock className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <input
+                      type="number"
+                      placeholder="Nhập số tháng (VD: 6, 12...)"
+                      value={formData.maturity_period}
+                      onChange={(e) => setFormData({ ...formData, maturity_period: e.target.value })}
+                      className="w-full bg-white border border-slate-200 rounded-xl pl-11 pr-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
+                    />
+                  </div>
+                  <p className="text-[10px] text-slate-400 italic font-medium">* Nếu rút trước hạn, lãi suất sẽ được tính theo lãi suất không kỳ hạn (0.1%).</p>
+                </div>
+              )}
             </div>
 
             <div className="space-y-6">
@@ -895,17 +1042,25 @@ export default function Portfolio() {
                         {new Date(t.date).toLocaleDateString('vi-VN')}
                       </td>
                       <td className="px-6 py-4">
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-slate-900">{t.asset_symbol}</span>
-                          <span className={cn(
-                            "px-1.5 py-0.5 rounded text-[8px] font-bold uppercase",
-                            t.asset_type === 'crypto' ? "bg-slate-900 text-white" :
-                            t.asset_type === 'gold' ? "bg-amber-50 text-amber-600" :
-                            t.asset_type === 'bank' ? "bg-emerald-50 text-emerald-600" :
-                            "bg-slate-50 text-slate-600"
-                          )}>
-                            {t.asset_type}
-                          </span>
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-slate-900">{t.asset_symbol}</span>
+                            <span className={cn(
+                              "px-1.5 py-0.5 rounded text-[8px] font-bold uppercase",
+                              t.asset_type === 'crypto' ? "bg-slate-900 text-white" :
+                              t.asset_type === 'gold' ? "bg-amber-50 text-amber-600" :
+                              t.asset_type === 'bank' ? "bg-emerald-50 text-emerald-600" :
+                              "bg-slate-50 text-slate-600"
+                            )}>
+                              {t.asset_type === 'crypto' ? 'Crypto' : t.asset_type === 'gold' ? 'Vàng' : t.asset_type === 'bank' ? 'Ngân hàng' : 'BĐS'}
+                            </span>
+                          </div>
+                          {t.asset_type === 'bank' && t.maturity_period && t.maturity_period > 0 && (
+                            <div className="flex items-center gap-1 text-[10px] text-slate-400 font-bold">
+                              <Clock className="w-3 h-3" />
+                              <span>{t.maturity_period} tháng</span>
+                            </div>
+                          )}
                         </div>
                       </td>
                       <td className="px-6 py-4">

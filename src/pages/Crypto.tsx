@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { 
   TrendingUp, TrendingDown, DollarSign, Activity, 
   BrainCircuit, Target, AlertCircle, Clock, 
   ArrowRightLeft, Bot, LineChart as LineChartIcon,
   Zap, ShieldAlert, Info, Crown, ChevronUp, ChevronDown,
-  Calendar, RefreshCcw, Bitcoin, Loader2, Play
+  Calendar, RefreshCcw, Bitcoin, Loader2, Play, X, Maximize2
 } from 'lucide-react';
 import { 
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -62,6 +63,7 @@ export default function Crypto() {
   const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant', content: string }[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [isChatting, setIsChatting] = useState(false);
+  const [selectedAgentAnalysis, setSelectedAgentAnalysis] = useState<{ name: string, content: string } | null>(null);
   const [aiInsights, setAiInsights] = useState<{
     fearGreedIndex: number;
     fearGreedLabel: string;
@@ -769,8 +771,8 @@ Hãy trả lời ngắn gọn, chuyên nghiệp và bám sát bối cảnh phân
                         <p className={cn("text-[10px] font-bold mb-1", msg.role === 'user' ? "text-indigo-600 text-right" : "text-indigo-600")}>
                           {msg.role === 'user' ? "BẠN" : "CIO"}
                         </p>
-                        <div className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">
-                          {msg.content}
+                        <div className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed prose prose-slate prose-sm max-w-none">
+                          <ReactMarkdown>{msg.content}</ReactMarkdown>
                         </div>
                       </div>
                     </div>
@@ -896,7 +898,18 @@ Hãy trả lời ngắn gọn, chuyên nghiệp và bám sát bối cảnh phân
                     ) : agentResponses.cio.status === 'idle' ? (
                       "Nhấn 'Chạy Phân tích AI' để nhận quyết định cuối cùng từ Giám đốc Đầu tư."
                     ) : (
-                      <div className="whitespace-pre-wrap">{agentResponses.cio.content}</div>
+                      <div className="space-y-4">
+                        <div className="prose prose-invert prose-slate prose-sm max-w-none line-clamp-4 opacity-80">
+                          <ReactMarkdown>{agentResponses.cio.content}</ReactMarkdown>
+                        </div>
+                        <button 
+                          onClick={() => setSelectedAgentAnalysis({ name: 'Supreme Commander (CIO)', content: agentResponses.cio.content })}
+                          className="text-indigo-400 text-xs font-bold hover:text-indigo-300 transition-colors flex items-center gap-1.5"
+                        >
+                          <Maximize2 className="w-3.5 h-3.5" />
+                          ĐỌC TOÀN BỘ BÁO CÁO CIO
+                        </button>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -965,7 +978,18 @@ Hãy trả lời ngắn gọn, chuyên nghiệp và bám sát bối cảnh phân
                       ) : agentResponses[agent.id].status === 'idle' ? (
                         "Chờ lệnh phân tích..."
                       ) : (
-                        <div className="line-clamp-6">{agentResponses[agent.id].content}</div>
+                        <div className="space-y-3">
+                          <div className="prose prose-slate prose-sm max-w-none line-clamp-5 opacity-80">
+                            <ReactMarkdown>{agentResponses[agent.id].content}</ReactMarkdown>
+                          </div>
+                          <button 
+                            onClick={() => setSelectedAgentAnalysis({ name: agent.name, content: agentResponses[agent.id].content })}
+                            className="text-indigo-600 text-[10px] font-black uppercase tracking-widest hover:text-indigo-700 transition-colors flex items-center gap-1"
+                          >
+                            <Maximize2 className="w-3 h-3" />
+                            Xem chi tiết
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -1097,6 +1121,48 @@ Hãy trả lời ngắn gọn, chuyên nghiệp và bám sát bối cảnh phân
                   Bitcoin là tài sản biến động cao. Chỉ nên đầu tư số vốn bạn có thể chấp nhận mất. Chiến lược DCA này được thiết kế cho tầm nhìn 12-24 tháng.
                 </p>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Analysis Modal */}
+      {selectedAgentAnalysis && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6">
+          <div 
+            className="absolute inset-0 bg-slate-900/80 backdrop-blur-sm"
+            onClick={() => setSelectedAgentAnalysis(null)}
+          ></div>
+          <div className="relative bg-white rounded-3xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col animate-in fade-in zoom-in duration-200">
+            <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center">
+                  <BrainCircuit className="w-6 h-6 text-white" />
+                </div>
+                <div>
+                  <h3 className="font-black text-slate-900 uppercase tracking-tight">{selectedAgentAnalysis.name}</h3>
+                  <p className="text-xs text-slate-500 font-medium">Báo cáo phân tích chi tiết</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setSelectedAgentAnalysis(null)}
+                className="p-2 hover:bg-slate-200 rounded-xl transition-colors text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            <div className="p-8 overflow-y-auto flex-1">
+              <div className="prose prose-slate prose-indigo max-w-none">
+                <ReactMarkdown>{selectedAgentAnalysis.content}</ReactMarkdown>
+              </div>
+            </div>
+            <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end">
+              <button 
+                onClick={() => setSelectedAgentAnalysis(null)}
+                className="px-6 py-2.5 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800 transition-all shadow-lg"
+              >
+                Đóng báo cáo
+              </button>
             </div>
           </div>
         </div>

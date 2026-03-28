@@ -594,6 +594,7 @@ export default function Portfolio() {
         if (tx.transaction_type === 'buy') {
           holding.totalAmount += amount;
           holding.totalInvested += valueInUsd;
+          holding.purchasePrice = (holding.purchasePrice || 0) + valueInUsd;
         } else if (tx.transaction_type === 'sell') {
           holding.totalAmount -= amount;
           holding.totalInvested -= valueInUsd;
@@ -644,6 +645,11 @@ export default function Portfolio() {
         
         holding.currentValue = assetValue - loanCurrentValue;
         holding.loanCurrentValue = loanCurrentValue;
+        
+        if (holding.asset_type === 'real_estate') {
+          // For Real Estate, "Cost Price" is Purchase Price - Current Debt
+          holding.totalInvested = (holding.purchasePrice || 0) - loanCurrentValue;
+        }
       }
     });
     
@@ -1227,7 +1233,9 @@ export default function Portfolio() {
                     <div className="font-mono font-bold text-slate-700">
                       {holding.asset_type === 'bank' || holding.asset_type === 'cash'
                         ? formatCurrency(currency === 'VND' ? holding.totalAmount * exchangeRate : holding.totalAmount, currency)
-                        : holding.totalAmount.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+                        : holding.asset_type === 'real_estate'
+                          ? `Số lượng: ${holding.totalAmount}`
+                          : holding.totalAmount.toLocaleString(undefined, { maximumFractionDigits: 6 })}
                     </div>
                     {holding.asset_type === 'bank' && holding.depositTx?.term > 0 && (
                       <div className={cn(

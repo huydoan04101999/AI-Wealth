@@ -256,7 +256,7 @@ export default function Portfolio() {
     // Normalize base value to USD for internal calculations
     const baseValueInUsd = txCurrency === 'VND' ? (amount * originalPrice) / exchangeRate : (amount * originalPrice);
 
-    if (tx.asset_type === 'bank' && tx.interest_rate) {
+    if (tx.asset_type === 'bank' && tx.interest_rate && tx.transaction_type === 'deposit') {
       const rate = parseFloat(tx.interest_rate) / 100;
       const startDate = new Date(tx.date);
       const now = new Date();
@@ -285,11 +285,31 @@ export default function Portfolio() {
   // Group assets by type to calculate total value
   const assetTotals = transactions.reduce((acc, tx) => {
     const value = calculateCurrentValue(tx);
-    acc[tx.asset_type] = (acc[tx.asset_type] || 0) + value;
+    if (tx.transaction_type === 'sell' || tx.transaction_type === 'withdraw') {
+      acc[tx.asset_type] = (acc[tx.asset_type] || 0) - value;
+    } else {
+      acc[tx.asset_type] = (acc[tx.asset_type] || 0) + value;
+    }
     return acc;
   }, {} as Record<string, number>);
 
   const totalPortfolioValue = Object.values(assetTotals).reduce((sum, val) => sum + val, 0);
+  
+  const totalInvestedInUsd = transactions.reduce((sum, tx) => {
+    const amount = parseFloat(tx.amount);
+    const price = parseFloat(tx.price_per_unit);
+    const txCurrency = tx.currency || 'USD';
+    const valueInUsd = txCurrency === 'VND' ? (amount * price) / exchangeRate : (amount * price);
+    
+    if (tx.transaction_type === 'buy' || tx.transaction_type === 'deposit') {
+      return sum + valueInUsd;
+    } else {
+      return sum - valueInUsd;
+    }
+  }, 0);
+
+  const totalProfitLoss = totalPortfolioValue - totalInvestedInUsd;
+  const totalProfitLossPercentage = totalInvestedInUsd > 0 ? (totalProfitLoss / totalInvestedInUsd) * 100 : 0;
 
   // Calculate score based on weights
   // Bank/Cash: 1, Bonds: 3, Crypto: 8, Gold: 9, Real Estate: 10
@@ -414,6 +434,65 @@ export default function Portfolio() {
             <Plus className="w-4 h-4" />
             Thêm Giao dịch
           </button>
+        </div>
+      </div>
+      
+      {/* Portfolio Summary Section */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-2">
+          <div className="flex items-center gap-2 text-slate-400">
+            <TrendingUp className="w-4 h-4" />
+            <span className="text-[10px] font-bold uppercase tracking-widest">Tổng giá trị hiện tại</span>
+          </div>
+          <div className="flex flex-col">
+            <span className="text-2xl font-black text-slate-900">
+              {formatCurrency(currency === 'VND' ? totalPortfolioValue * exchangeRate : totalPortfolioValue, currency)}
+            </span>
+            {currency === 'VND' && (
+              <span className="text-xs font-medium text-slate-400">
+                ≈ {formatCurrency(totalPortfolioValue, 'USD')}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-2">
+          <div className="flex items-center gap-2 text-slate-400">
+            <History className="w-4 h-4" />
+            <span className="text-[10px] font-bold uppercase tracking-widest">Tổng vốn đầu tư</span>
+          </div>
+          <div className="flex flex-col">
+            <span className="text-2xl font-black text-slate-900">
+              {formatCurrency(currency === 'VND' ? totalInvestedInUsd * exchangeRate : totalInvestedInUsd, currency)}
+            </span>
+            {currency === 'VND' && (
+              <span className="text-xs font-medium text-slate-400">
+                ≈ {formatCurrency(totalInvestedInUsd, 'USD')}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-2">
+          <div className="flex items-center gap-2 text-slate-400">
+            <AlertCircle className="w-4 h-4" />
+            <span className="text-[10px] font-bold uppercase tracking-widest">Tổng Lợi nhuận / Lỗ</span>
+          </div>
+          <div className="flex flex-col">
+            <div className={cn(
+              "text-2xl font-black flex items-center gap-2",
+              totalProfitLoss >= 0 ? "text-emerald-600" : "text-rose-600"
+            )}>
+              {totalProfitLoss >= 0 ? <ArrowUpRight className="w-6 h-6" /> : <ArrowDownRight className="w-6 h-6" />}
+              {formatCurrency(currency === 'VND' ? Math.abs(totalProfitLoss) * exchangeRate : Math.abs(totalProfitLoss), currency)}
+            </div>
+            <span className={cn(
+              "text-xs font-bold",
+              totalProfitLoss >= 0 ? "text-emerald-500" : "text-rose-500"
+            )}>
+              {totalProfitLoss >= 0 ? '+' : '-'}{Math.abs(totalProfitLossPercentage).toFixed(2)}%
+            </span>
+          </div>
         </div>
       </div>
 
@@ -782,14 +861,16 @@ export default function Portfolio() {
                 <th className="px-6 py-4">Loại</th>
                 <th className="px-6 py-4 text-right">Số lượng</th>
                 <th className="px-6 py-4 text-right">Giá / Lãi suất</th>
-                <th className="px-6 py-4 text-right">Tổng giá trị</th>
+                <th className="px-6 py-4 text-right">Giá trị Giao dịch</th>
+                <th className="px-6 py-4 text-right">Giá trị Hiện tại</th>
+                <th className="px-6 py-4 text-right">Lợi nhuận</th>
                 <th className="px-6 py-4 text-right">Hành động</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {transactions.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-16 text-center text-slate-400 italic font-medium">
+                  <td colSpan={9} className="px-6 py-16 text-center text-slate-400 italic font-medium">
                     Chưa có giao dịch nào. Hãy thêm giao dịch đầu tiên của bạn.
                   </td>
                 </tr>
@@ -797,7 +878,15 @@ export default function Portfolio() {
                 transactions.map((t) => {
                   const currentValueInUsd = calculateCurrentValue(t);
                   const txCurrency = (t.currency || 'USD') as 'USD' | 'VND';
-                  const displayValue = txCurrency === 'VND' ? currentValueInUsd * exchangeRate : currentValueInUsd;
+                  const displayCurrentValue = txCurrency === 'VND' ? currentValueInUsd * exchangeRate : currentValueInUsd;
+                  
+                  const amount = parseFloat(t.amount);
+                  const originalPrice = parseFloat(t.price_per_unit);
+                  const transactionValue = amount * originalPrice;
+                  
+                  const profitLoss = displayCurrentValue - transactionValue;
+                  const profitLossPercentage = (profitLoss / transactionValue) * 100;
+                  
                   const displayPrice = parseFloat(t.price_per_unit);
 
                   return (
@@ -835,8 +924,20 @@ export default function Portfolio() {
                       <td className="px-6 py-4 text-right font-mono text-slate-500 font-medium">
                         {t.asset_type === 'bank' ? `${t.interest_rate}%` : formatCurrency(displayPrice, t.currency as 'USD' | 'VND')}
                       </td>
+                      <td className="px-6 py-4 text-right font-mono font-bold text-slate-700">
+                        {formatCurrency(transactionValue, t.currency as 'USD' | 'VND')}
+                      </td>
                       <td className="px-6 py-4 text-right font-mono font-bold text-slate-900">
-                        {formatCurrency(displayValue, t.currency as 'USD' | 'VND')}
+                        {formatCurrency(displayCurrentValue, t.currency as 'USD' | 'VND')}
+                      </td>
+                      <td className="px-6 py-4 text-right font-mono font-bold">
+                        <div className={cn(
+                          "flex flex-col items-end",
+                          profitLoss >= 0 ? "text-emerald-600" : "text-rose-600"
+                        )}>
+                          <span>{profitLoss >= 0 ? '+' : ''}{formatCurrency(profitLoss, t.currency as 'USD' | 'VND')}</span>
+                          <span className="text-[10px] opacity-80">{profitLoss >= 0 ? '+' : ''}{profitLossPercentage.toFixed(2)}%</span>
+                        </div>
                       </td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end gap-2">

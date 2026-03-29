@@ -704,6 +704,65 @@ Lưu ý: Format bằng Markdown, sử dụng emoji phù hợp để báo cáo si
         </div>
       </div>
 
+      {/* Overall Stats Section */}
+      <div className="space-y-4">
+        <div className="flex items-center gap-2">
+          <div className="w-1.5 h-6 bg-indigo-600 rounded-full" />
+          <h3 className="font-bold text-slate-900 uppercase tracking-widest text-xs">Tổng quan Tài sản (VND)</h3>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="p-6 rounded-3xl border border-slate-200 bg-white shadow-sm hover:shadow-md transition-all group">
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-10 h-10 rounded-xl bg-slate-50 flex items-center justify-center group-hover:bg-indigo-50 transition-colors">
+                <Wallet className="w-5 h-5 text-slate-400 group-hover:text-indigo-600 transition-colors" />
+              </div>
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Tổng tài sản (VND)</span>
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-2xl font-bold tracking-tight text-slate-900">{formatCompactCurrency((usdTotalCurrentValue * exchangeRate) + displayVndTotalCurrentValue, 'VND')}</h3>
+              <p className="text-xs font-medium text-slate-400">Tổng Crypto + Tài sản VN</p>
+            </div>
+          </div>
+
+          <div className="p-6 rounded-3xl border border-slate-200 bg-white shadow-sm hover:shadow-md transition-all group">
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-10 h-10 rounded-xl bg-slate-50 flex items-center justify-center group-hover:bg-indigo-50 transition-colors">
+                <DollarSign className="w-5 h-5 text-slate-400 group-hover:text-indigo-600 transition-colors" />
+              </div>
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Tổng vốn đầu tư (VND)</span>
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-2xl font-bold tracking-tight text-slate-900">{formatCompactCurrency((usdTotalInvested * exchangeRate) + displayVndTotalInvested, 'VND')}</h3>
+              <p className="text-xs font-medium text-slate-400">Tổng vốn đã giải ngân</p>
+            </div>
+          </div>
+
+          <div className="p-6 rounded-3xl border border-slate-200 bg-white shadow-sm hover:shadow-md transition-all group">
+            <div className="flex items-center justify-between mb-4">
+              <div className={cn(
+                "w-10 h-10 rounded-xl flex items-center justify-center transition-colors",
+                ((usdTotalCurrentValue * exchangeRate) + displayVndTotalCurrentValue) - ((usdTotalInvested * exchangeRate) + displayVndTotalInvested) >= 0 ? "bg-emerald-50 group-hover:bg-emerald-100" : "bg-rose-50 group-hover:bg-rose-100"
+              )}>
+                <Activity className={cn("w-5 h-5", ((usdTotalCurrentValue * exchangeRate) + displayVndTotalCurrentValue) - ((usdTotalInvested * exchangeRate) + displayVndTotalInvested) >= 0 ? "text-emerald-600" : "text-rose-600")} />
+              </div>
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Tổng lợi nhuận</span>
+            </div>
+            <div className="space-y-1">
+              <div className="flex items-baseline gap-2">
+                <h3 className={cn("text-2xl font-bold tracking-tight", ((usdTotalCurrentValue * exchangeRate) + displayVndTotalCurrentValue) - ((usdTotalInvested * exchangeRate) + displayVndTotalInvested) >= 0 ? "text-emerald-600" : "text-rose-600")}>
+                  {((usdTotalCurrentValue * exchangeRate) + displayVndTotalCurrentValue) - ((usdTotalInvested * exchangeRate) + displayVndTotalInvested) >= 0 ? '+' : '-'}{formatCompactCurrency(Math.abs(((usdTotalCurrentValue * exchangeRate) + displayVndTotalCurrentValue) - ((usdTotalInvested * exchangeRate) + displayVndTotalInvested)), 'VND')}
+                </h3>
+                <span className={cn("flex items-center text-xs font-bold", ((usdTotalCurrentValue * exchangeRate) + displayVndTotalCurrentValue) - ((usdTotalInvested * exchangeRate) + displayVndTotalInvested) >= 0 ? "text-emerald-600" : "text-rose-600")}>
+                  {((usdTotalCurrentValue * exchangeRate) + displayVndTotalCurrentValue) - ((usdTotalInvested * exchangeRate) + displayVndTotalInvested) >= 0 ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
+                  {(((usdTotalInvested * exchangeRate) + displayVndTotalInvested) > 0 ? ((((usdTotalCurrentValue * exchangeRate) + displayVndTotalCurrentValue) - ((usdTotalInvested * exchangeRate) + displayVndTotalInvested)) / ((usdTotalInvested * exchangeRate) + displayVndTotalInvested)) * 100 : 0).toFixed(2)}%
+                </span>
+              </div>
+              <p className="text-xs font-medium text-slate-400">Tỷ lệ tăng trưởng tổng tài sản</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* USD Stats Section */}
       <div className="space-y-4">
         <div className="flex items-center gap-2">

@@ -577,9 +577,9 @@ Dữ liệu tài chính hiện tại:
 - Lợi nhuận: ${formatCurrency(displayVndTotalPnl, 'VND')} (${vndTotalPnlPercent.toFixed(2)}%)
 
 Tỷ trọng tài sản (theo giá trị quy đổi VND):
-- Tiền mặt/Ngân hàng: ${totalCurrentValue > 0 ? ((bankValue / totalCurrentValue) * 100).toFixed(1) : 0}%
+- Tiền mặt/Ngân hàng: ${totalCurrentValue > 0 ? (((bankValue + cashValue) / totalCurrentValue) * 100).toFixed(1) : 0}%
 - Vàng: ${totalCurrentValue > 0 ? ((goldValue / totalCurrentValue) * 100).toFixed(1) : 0}%
-- Crypto: ${totalCurrentValue > 0 ? ((usdTotalCurrentValue * exchangeRate / totalCurrentValue) * 100).toFixed(1) : 0}%
+- Crypto: ${totalCurrentValue > 0 ? ((cryptoValue / totalCurrentValue) * 100).toFixed(1) : 0}%
 - Bất động sản: ${totalCurrentValue > 0 ? ((realEstateValue / totalCurrentValue) * 100).toFixed(1) : 0}%
 
 Chi tiết tài sản:
